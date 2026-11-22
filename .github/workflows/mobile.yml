@@ -69,7 +69,14 @@ jobs:
           yes | "$SDKMANAGER" --licenses > /dev/null || true
           "$SDKMANAGER" 'platforms;android-35' 'build-tools;35.0.0' 'ndk;27.2.12479018'
       - name: Android lint before compiling native libraries and APK
-        run: bash scripts/build-android.sh lint
+        run: |
+          set -o pipefail
+          if ! bash scripts/build-android.sh lint 2>&1 | tee lint.log; then
+            grep -nE "FAILURE:|What went wrong|Execution failed|error:|Lint found|> Task .*FAILED" lint.log \
+              | head -n 40 \
+              | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          fi
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: '1.83.0'

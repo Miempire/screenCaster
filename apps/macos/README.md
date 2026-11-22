@@ -74,8 +74,15 @@ Swift 侧通过 **bridging header** 引入头文件：
 头文件搜索路径是 `$(SRCROOT)/../../native/include`，所以 Swift 看到的头与
 `native/tools/header_smoke.c` 编译的是同一份字节，而不是 xcframework 里可能过期的副本。
 
-链接参数：`-liconv -lresolv -framework CoreFoundation -framework Security`（Rust std 在 Apple
-平台引用到的系统库）。`native/Cargo.toml` 的 `staticlib` 产物名是 `libscreencast_core.a`。
+App 直接链接 `$(SRCROOT)/build/universal/libscreencast_core.a`（`LIBRARY_SEARCH_PATHS` +
+`-lscreencast_core`），**不把 xcframework 作为 target dependency**。原因是 xcframework 与
+`native/include/module.modulemap` 会各自声明一个 `ScreenCastCore` Clang module，同时存在会让
+bridging header 的 PCH 报 `redefinition of module 'ScreenCastCore'`。xcframework 仍然由
+`framework` 生成，供 `verify` 检查布局与给其他客户端复用。
+
+链接参数：`-lscreencast_core -liconv -lresolv -framework CoreFoundation -framework Security`
+（Rust std 在 Apple 平台引用到的系统库）。`native/Cargo.toml` 的 `staticlib` 产物名是
+`libscreencast_core.a`。
 
 ### C ABI 调用点（14 个函数全部用到）
 

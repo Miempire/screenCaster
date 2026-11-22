@@ -30,9 +30,14 @@ targets:
         SWIFT_OBJC_BRIDGING_HEADER: Sources/Support/ScreenCastBridge.h
         # `screencast_core.h` resolves from the repository, not from the built xcframework, so the
         # header Swift sees is byte-identical to the one native/tools/header_smoke.c compiles.
+        # Linking the archive directly (instead of the XCFramework) avoids two Clang module maps
+        # both declaring module `ScreenCastCore`, which breaks the bridging header PCH.
         HEADER_SEARCH_PATHS:
           - $(inherited)
           - $(SRCROOT)/../../native/include
+        LIBRARY_SEARCH_PATHS:
+          - $(inherited)
+          - $(SRCROOT)/build/universal
         ALWAYS_SEARCH_USER_PATHS: NO
         # No sandbox: ScreenCaptureKit capture plus CGEvent injection inside a sandbox is a lot of
         # entitlement plumbing for a tool that only runs on the user's own machine.
@@ -50,15 +55,13 @@ targets:
         # The Rust staticlib needs the Apple resolver/iconv shims it references through std.
         OTHER_LDFLAGS:
           - $(inherited)
+          - -lscreencast_core
           - -liconv
           - -lresolv
           - -framework
           - CoreFoundation
           - -framework
           - Security
-    dependencies:
-      - framework: Frameworks/ScreenCastCore.xcframework
-        embed: false
 schemes:
   ScreenCastMac:
     build:
