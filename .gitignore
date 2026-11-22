@@ -30,3 +30,5 @@ temp/
 .env
 .env.*
 !.env.example
+# Local AI workspace notes
+.trae/

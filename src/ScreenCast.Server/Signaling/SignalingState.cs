@@ -1,4 +1,5 @@
 using System.Net;
+using ScreenCast.Core.Signaling;
 
 namespace ScreenCast.Server.Signaling;
 

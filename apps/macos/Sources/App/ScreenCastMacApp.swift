@@ -52,7 +52,6 @@ struct RootView: View {
 
     @State private var section: WorkspaceSection = .devices
     @State private var activeDeviceName = ""
-    @State private var lastSavedCode: String?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -66,14 +65,14 @@ struct RootView: View {
                 case .devices:
                     DevicesPage(book: book,
                                 viewer: viewer,
-                                savedCode: lastSavedCode,
                                 onConnect: connect,
+                                onConnectByCode: connectByCode,
                                 onDirectConnect: connectDirect)
                 case .assist:
                     AssistPage(book: book,
                                viewer: viewer,
-                               savedCode: lastSavedCode,
                                onConnect: connect,
+                               onConnectByCode: connectByCode,
                                onDirectConnect: connectDirect)
                 case .host:
                     HostPage(host: host)
@@ -109,12 +108,17 @@ struct RootView: View {
         book.touch(code: device.code)
     }
 
+    private func connectByCode(_ code: String) {
+        guard !viewer.connected else { return }
+        activeDeviceName = "连接码 \(code)"
+        Task { await viewer.connectByCode(code) }
+    }
+
     private func connectDirect(_ host: String, _ videoPort: Int, _ controlPort: Int) {
         let saved = book.remember(name: host,
                                   host: host,
                                   videoPort: videoPort,
                                   controlPort: controlPort)
-        lastSavedCode = saved.code
         connect(saved)
     }
 }
@@ -243,6 +247,6 @@ struct SidebarView: View {
     private var statusDetail: String {
         if viewer.connected { return viewer.statusText }
         if host.running { return host.statusText }
-        return "连接码仅保存在本机"
+        return "服务器 jsspace.xyz · UDP 3479"
     }
 }

@@ -9,8 +9,8 @@ import SwiftUI
 struct DevicesPage: View {
     @ObservedObject var book: DeviceBook
     @ObservedObject var viewer: ViewerSession
-    let savedCode: String?
     let onConnect: (SavedDevice) -> Void
+    let onConnectByCode: (String) -> Void
     let onDirectConnect: (String, Int, Int) -> Void
 
     var body: some View {
@@ -18,20 +18,13 @@ struct DevicesPage: View {
             VStack(alignment: .leading, spacing: 22) {
                 HStack(alignment: .top) {
                     SectionHeader(title: "设备",
-                                  subtitle: "输入连接码，或从已保存设备中直接连接")
+                                  subtitle: "输入 9 位连接码，或从已保存设备中直接连接")
                     Spacer()
                     Badge(text: "控制端", tint: Theme.dim, fill: Theme.surfaceAlt)
                 }
 
                 RemoteAssistCard(viewer: viewer,
-                                 savedCode: savedCode,
-                                 onConnectCode: { code in
-                                     guard let device = book.device(forCode: code) else {
-                                         return false
-                                     }
-                                     onConnect(device)
-                                     return true
-                                 },
+                                 onConnectByCode: onConnectByCode,
                                  onDirectConnect: onDirectConnect)
 
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -42,7 +35,7 @@ struct DevicesPage: View {
                           fill: Theme.surfaceAlt)
                     Spacer()
                     if !book.devices.isEmpty {
-                        Text("连接码保存在本机")
+                        Text("本机快捷码，不经过服务器")
                             .font(.system(size: 10))
                             .foregroundStyle(Theme.faint)
                     }
@@ -74,26 +67,19 @@ struct DevicesPage: View {
 struct AssistPage: View {
     @ObservedObject var book: DeviceBook
     @ObservedObject var viewer: ViewerSession
-    let savedCode: String?
     let onConnect: (SavedDevice) -> Void
+    let onConnectByCode: (String) -> Void
     let onDirectConnect: (String, Int, Int) -> Void
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 SectionHeader(title: "远程协助",
-                              subtitle: "用 9 位连接码连接已保存的设备，或通过 IP 地址首次连接")
+                              subtitle: "用 9 位连接码连接对方设备，或通过 IP 地址直连")
 
                 HStack(alignment: .top, spacing: 18) {
                     RemoteAssistCard(viewer: viewer,
-                                     savedCode: savedCode,
-                                     onConnectCode: { code in
-                                         guard let device = book.device(forCode: code) else {
-                                             return false
-                                         }
-                                         onConnect(device)
-                                         return true
-                                     },
+                                     onConnectByCode: onConnectByCode,
                                      onDirectConnect: onDirectConnect)
                         .frame(maxWidth: 640)
 
@@ -103,9 +89,9 @@ struct AssistPage: View {
                                 Text("连接步骤")
                                     .font(.system(size: 13, weight: .semibold))
                                     .foregroundStyle(Theme.text)
-                                StepRow(index: 1, text: "在被控电脑上打开 ScreenCast，开始被控并记下端口。")
-                                StepRow(index: 2, text: "在 IP 直连中填写地址与视频 / 控制端口。")
-                                StepRow(index: 3, text: "连接成功后设备会自动保存，并生成 9 位连接码。")
+                                StepRow(index: 1, text: "在被控电脑上开始共享，记下服务端签发的 9 位连接码。")
+                                StepRow(index: 2, text: "在这台 Mac 输入连接码，双方通过 jsspace.xyz 交换媒体地址。")
+                                StepRow(index: 3, text: "连接成功后画面直接显示；IP 直连保留在高级模式。")
                             }
                         }
 
@@ -114,7 +100,7 @@ struct AssistPage: View {
                                 Text("当前限制")
                                     .font(.system(size: 13, weight: .semibold))
                                     .foregroundStyle(Theme.text)
-                                Text("本版本不含中继与自动打洞，两端需要网络可达；会话使用 UDP 点对点传输，负载 AES-256-GCM 加密。")
+                                Text("通过 jsspace.xyz 配对，两端仍使用 UDP 点对点传输，负载 AES-256-GCM 加密；没有 TURN 时，严格 NAT 后可能无法连通。")
                                     .font(.system(size: 11))
                                     .foregroundStyle(Theme.dim)
                                     .fixedSize(horizontal: false, vertical: true)
@@ -137,8 +123,7 @@ struct AssistPage: View {
 
 struct RemoteAssistCard: View {
     @ObservedObject var viewer: ViewerSession
-    let savedCode: String?
-    let onConnectCode: (String) -> Bool
+    let onConnectByCode: (String) -> Void
     let onDirectConnect: (String, Int, Int) -> Void
 
     @State private var code = ""
@@ -162,31 +147,10 @@ struct RemoteAssistCard: View {
                             .foregroundStyle(Theme.dim)
                     }
                     Spacer()
-                    if savedCode != nil {
-                        Badge(text: "新设备已保存")
-                    }
+                    Badge(text: "服务器 jsspace.xyz", tint: Theme.accent, fill: Theme.accentSoft)
                 }
 
                 CodeEntryView(code: $code)
-
-                if let savedCode {
-                    HStack(spacing: 8) {
-                        Image(systemName: "checkmark.seal.fill")
-                            .font(.system(size: 11))
-                            .foregroundStyle(Theme.accent)
-                        Text("连接码 \(spaced(savedCode))")
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(Theme.accent)
-                        Spacer()
-                        Text("下次可直接用此码连接")
-                            .font(.system(size: 10))
-                            .foregroundStyle(Theme.faint)
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .background(Theme.accentSoft.opacity(0.7))
-                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                }
 
                 Button(action: submit) {
                     HStack(spacing: 8) {
@@ -199,7 +163,7 @@ struct RemoteAssistCard: View {
                 .keyboardShortcut(.defaultAction)
 
                 HStack(spacing: 6) {
-                    Button(showingDirect ? "收起 IP 直连" : "使用 IP 地址直连") {
+                    Button(showingDirect ? "收起 IP 直连" : "高级：使用 IP 地址直连") {
                         showingDirect.toggle()
                         hint = nil
                     }
@@ -213,7 +177,7 @@ struct RemoteAssistCard: View {
 
                     Spacer()
 
-                    Text("连接码仅保存在本机")
+                    Text("服务器 jsspace.xyz · UDP 3479")
                         .font(.system(size: 10))
                         .foregroundStyle(Theme.faint)
                 }
@@ -226,7 +190,7 @@ struct RemoteAssistCard: View {
                             LabeledInput(title: "控制端口", text: $controlPort, width: 130)
                             Spacer()
                         }
-                        Text("首次连接用 IP 直连；成功后会自动保存为设备并生成连接码。")
+                        Text("直连不经过服务器，需要两端手动对齐密钥与端口。")
                             .font(.system(size: 10))
                             .foregroundStyle(Theme.faint)
                     }
@@ -249,7 +213,9 @@ struct RemoteAssistCard: View {
     private func submit() {
         hint = nil
 
-        if code.count == 9, onConnectCode(code) {
+        let digits = code.filter { $0.isNumber }
+        if digits.count == 9, digits.first != "0" {
+            onConnectByCode(digits)
             return
         }
         if showingDirect, !host.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -264,16 +230,7 @@ struct RemoteAssistCard: View {
             onDirectConnect(host.trimmingCharacters(in: .whitespaces), video, control)
             return
         }
-        hint = code.count == 9 ? "本机没有这个连接码，请改用 IP 地址直连。" : "请输入 9 位连接码。"
-    }
-
-    private func spaced(_ code: String) -> String {
-        guard code.count == 9 else { return code }
-        let start = code.startIndex
-        let first = code[start ..< code.index(start, offsetBy: 3)]
-        let second = code[code.index(start, offsetBy: 3) ..< code.index(start, offsetBy: 6)]
-        let third = code[code.index(start, offsetBy: 6)...]
-        return "\(first) \(second) \(third)"
+        hint = "请输入 9 位连接码，或在高级模式中填写 IP 地址。"
     }
 }
 
@@ -298,7 +255,7 @@ struct SavedDeviceCard: View {
                         .foregroundStyle(Theme.dim)
                         .lineLimit(1)
                     HStack(spacing: 6) {
-                        Text("连接码 \(device.spacedCode)")
+                        Text("快捷码 \(device.spacedCode)")
                             .font(.system(size: 10, design: .monospaced))
                             .foregroundStyle(Theme.accent)
                         Text("· \(relativeText)")

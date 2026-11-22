@@ -57,6 +57,8 @@ final class HostSession: ObservableObject {
     @Published private(set) var accessibilityTrusted = MacInputInjector.isAccessibilityTrusted()
     @Published private(set) var screenRecordingTrusted = ScreenCaptureSource.hasScreenRecordingPermission
     @Published private(set) var displays: [CaptureDisplay] = []
+    @Published private(set) var inviteCode = ""
+    @Published private(set) var peerSummary = ""
 
     @Published var selectedDisplayID: UInt32 = 0
     @Published var peerAddress = "127.0.0.1"
@@ -81,6 +83,16 @@ final class HostSession: ObservableObject {
     private let counters = CounterBox()
     private var exitSemaphore: DispatchSemaphore?
     private var statsTimer: Timer?
+
+    private var signaling: SignalingClient?
+    private var signalingView: SessionView?
+    private var signalingAccepted = false
+    private var signalingMediaStarted = false
+    private var signalingEpoch = 0
+    private var pendingDisplay: CaptureDisplay?
+    private var pendingTarget: (width: Int, height: Int) = (0, 0)
+    private var pendingFPS = CoreDefaults.defaultFPS
+    private var pendingBitrate = CoreDefaults.defaultBitrate
 
     private var displayBounds = CGRect.zero
     private var nextFrameID: UInt64 = 0
@@ -121,7 +133,7 @@ final class HostSession: ObservableObject {
 
     @MainActor
     func start() async {
-        guard !running else { return }
+        guard !running, signaling == nil else { return }
 
         guard let literal = HostResolver.literal(for: peerAddress) else {
             lastError = "对端地址 \(peerAddress) 无法解析为 IP 字面量（C ABI 不做 DNS）。"
@@ -164,47 +176,9 @@ final class HostSession: ObservableObject {
 
             self.core = core
             boundPorts = BoundPorts(video: bound.video, control: bound.control)
-            displayBounds = CGDisplayBounds(CGDirectDisplayID(display.id))
-
-            let injector = MacInputInjector()
-            injector.isTrusted = accessibilityTrusted
-            self.injector = injector
-
-            let encoder = H264Encoder(width: target.width,
-                                      height: target.height,
-                                      fps: fps,
-                                      bitrate: bitrate) { [weak self] output in
-                self?.send(output)
-            }
-            guard encoder.prepare() else {
-                throw HostError.encoderUnavailable
-            }
-            self.encoder = encoder
-
-            counters.reset()
-            nextFrameID = 0
-            lastFPSStamp = CFAbsoluteTimeGetCurrent()
-            fpsAtStamp = 0
-            // The very first frame must be a key frame or the viewer has no reference to start from.
-            forceKeyFrame.raise()
-
-            let capture = ScreenCaptureSource()
-            self.capture = capture
-            try await capture.start(displayID: CGDirectDisplayID(display.id),
-                                    width: target.width,
-                                    height: target.height,
-                                    fps: fps) { [weak self] pixelBuffer, timestampUS in
-                guard let self else { return }
-                self.counters.add("captured")
-                _ = self.encoder?.encode(pixelBuffer: pixelBuffer,
-                                         presentationTimeUS: timestampUS,
-                                         forceKeyFrame: self.forceKeyFrame.take())
-            }
-
-            running = true
-            lastError = ""
+            peerSummary = "\(literal):\(peerVideo)/\(peerControl)"
+            try await beginCapture(display: display, target: target, fps: fps, bitrate: bitrate)
             statusText = "共享中：\(display.name) \(target.width)x\(target.height)@\(fps) · 本机端口 \(bound.video)/\(bound.control) · 对端 \(literal):\(peerVideo)/\(peerControl)"
-            startPolling()
         } catch {
             lastError = error.localizedDescription
             statusText = "启动失败"
@@ -213,10 +187,277 @@ final class HostSession: ObservableObject {
     }
 
     @MainActor
+    func startSignaling() async {
+        guard !running, signaling == nil else { return }
+
+        guard let display = selectedDisplay else {
+            lastError = "没有选择显示器（先点“刷新显示器”并授予屏幕录制权限）。"
+            return
+        }
+
+        refreshPermissions()
+        guard screenRecordingTrusted else {
+            ScreenCaptureSource.requestScreenRecordingPermission()
+            lastError = "需要“屏幕录制”权限才能采集画面：系统设置 → 隐私与安全性 → 屏幕录制。"
+            return
+        }
+
+        let maxWidth = Int(maxWidthText.trimmingCharacters(in: .whitespaces)) ?? CoreDefaults.defaultWidth
+        let maxHeight = Int(maxHeightText.trimmingCharacters(in: .whitespaces)) ?? CoreDefaults.defaultHeight
+        let fps = max(1, min(60, Int(fpsText.trimmingCharacters(in: .whitespaces)) ?? CoreDefaults.defaultFPS))
+        let bitrate = max(1, Int(bitrateText.trimmingCharacters(in: .whitespaces)) ?? 8) * 1_000_000
+
+        pendingDisplay = display
+        pendingTarget = ScreenCaptureSource.targetSize(for: display, maxWidth: maxWidth, maxHeight: maxHeight)
+        pendingFPS = fps
+        pendingBitrate = bitrate
+        lastError = ""
+        await openSignaling()
+    }
+
+    @MainActor
+    func refreshCode() async {
+        guard !running, !inviteCode.isEmpty else { return }
+        resetSignaling()
+        await openSignaling()
+    }
+
+    @MainActor
+    private func openSignaling() async {
+        guard signaling == nil else { return }
+        signalingEpoch += 1
+        let epoch = signalingEpoch
+        let client = SignalingClient()
+        signaling = client
+        client.onJoinRequested = { [weak self] view in
+            Task { @MainActor in
+                guard let self, self.signalingEpoch == epoch else { return }
+                await self.acceptViewer(view)
+            }
+        }
+        client.onPeerKey = { [weak self] message in
+            Task { @MainActor in
+                guard let self, self.signalingEpoch == epoch else { return }
+                self.handlePeerKey(message)
+            }
+        }
+        client.onSessionClosed = { [weak self] view in
+            Task { @MainActor in
+                guard let self, self.signalingEpoch == epoch else { return }
+                await self.handleSignalingClosed(view)
+            }
+        }
+        client.onError = { [weak self] error in
+            Task { @MainActor in
+                guard let self, self.signalingEpoch == epoch else { return }
+                self.lastError = error.localizedDescription
+            }
+        }
+        client.onFault = { [weak self] error in
+            Task { @MainActor in
+                guard let self, self.signalingEpoch == epoch, !self.running else { return }
+                self.lastError = error.localizedDescription
+            }
+        }
+
+        do {
+            try await client.start()
+            guard signalingEpoch == epoch else {
+                client.stop()
+                return
+            }
+            let created = try await client.createSession()
+            guard signalingEpoch == epoch else {
+                client.stop()
+                return
+            }
+            signalingView = created
+            signalingAccepted = false
+            signalingMediaStarted = false
+            inviteCode = created.inviteCode
+            statusText = "等待控制端输入连接码 \(created.inviteCode)…"
+        } catch {
+            client.stop()
+            guard signalingEpoch == epoch else { return }
+            signaling = nil
+            inviteCode = ""
+            lastError = error.localizedDescription
+            statusText = "信令连接失败"
+        }
+    }
+
+    @MainActor
+    private func acceptViewer(_ view: SessionView) async {
+        guard let client = signaling, let current = signalingView, !signalingAccepted else { return }
+        guard view.sessionId == current.sessionId else { return }
+        signalingAccepted = true
+        let epoch = signalingEpoch
+        statusText = "控制端已加入，正在接受…"
+        do {
+            let accepted = try await client.acceptSession(id: view.sessionId)
+            guard signalingEpoch == epoch else { return }
+            signalingView = accepted
+            let secret = try MediaKeys.deriveMediaSecret(code: inviteCode, sessionId: accepted.sessionId.bytes)
+            let core = try CoreSession(secret: secret, sessionID: accepted.sessionId.bytes, isHost: true)
+            let bound = try core.bind(videoPort: CoreDefaults.hostVideoPort,
+                                      controlPort: CoreDefaults.hostControlPort)
+            self.core = core
+            boundPorts = BoundPorts(video: bound.video, control: bound.control)
+
+            let info = PeerMediaInfo(role: PeerMediaInfo.hostRole,
+                                     videoPort: bound.video,
+                                     controlPort: bound.control,
+                                     localAddresses: PeerMediaInfo.localIPv4Addresses())
+            try await client.sendPeerKey(type: .peerKeyOffer,
+                                         sessionId: accepted.sessionId,
+                                         payload: Data(info.encode()))
+            guard signalingEpoch == epoch else { return }
+            statusText = "控制端已加入，正在交换媒体地址…"
+        } catch {
+            guard signalingEpoch == epoch else { return }
+            signalingAccepted = false
+            lastError = error.localizedDescription
+            resetSignaling()
+            statusText = "配对失败"
+        }
+    }
+
+    @MainActor
+    private func handlePeerKey(_ message: PeerKeyMessage) {
+        guard message.type == .peerKeyAnswer,
+              let current = signalingView,
+              message.sessionId == current.sessionId,
+              !signalingMediaStarted,
+              let peer = PeerMediaInfo.decode(Data(message.payload)) else { return }
+        guard let address = PeerMediaInfo.choosePeerAddress(peer: peer,
+                                                            peerObserved: current.viewerEndpoint,
+                                                            ownObserved: current.hostEndpoint) else {
+            lastError = "无法确定对端地址。"
+            return
+        }
+        signalingMediaStarted = true
+        let epoch = signalingEpoch
+        Task { @MainActor in
+            guard self.signalingEpoch == epoch else { return }
+            do {
+                try await self.startSignalingMedia(address: address, peer: peer)
+                if self.signalingEpoch != epoch {
+                    await self.cleanup()
+                }
+            } catch {
+                guard self.signalingEpoch == epoch else { return }
+                self.lastError = error.localizedDescription
+                await self.cleanup()
+                self.resetSignaling()
+                self.statusText = "启动失败"
+            }
+        }
+    }
+
+    @MainActor
+    private func startSignalingMedia(address: String, peer: PeerMediaInfo) async throws {
+        guard let core, let display = pendingDisplay else { return }
+        try core.setPeer(videoAddress: address, videoPort: peer.videoPort,
+                         controlAddress: address, controlPort: peer.controlPort)
+        try core.start()
+        peerSummary = "\(address):\(peer.videoPort)/\(peer.controlPort)"
+        try await beginCapture(display: display, target: pendingTarget, fps: pendingFPS, bitrate: pendingBitrate)
+        let videoPort = boundPorts?.video ?? 0
+        let controlPort = boundPorts?.control ?? 0
+        statusText = "共享中：\(display.name) \(pendingTarget.width)x\(pendingTarget.height)@\(pendingFPS) · 本机端口 \(videoPort)/\(controlPort) · 对端 \(address):\(peer.videoPort)/\(peer.controlPort)"
+    }
+
+    @MainActor
+    private func handleSignalingClosed(_ view: SessionView) async {
+        guard !signalingMediaStarted else { return }
+        if let current = signalingView, view.sessionId != current.sessionId { return }
+        signalingEpoch += 1
+        signaling?.stop()
+        signaling = nil
+        signalingView = nil
+        signalingAccepted = false
+        inviteCode = ""
+        core?.close()
+        core = nil
+        boundPorts = nil
+        statusText = "连接码已过期，正在刷新…"
+        await openSignaling()
+    }
+
+    @MainActor
+    private func resetSignaling() {
+        signalingEpoch += 1
+        signaling?.stop()
+        signaling = nil
+        signalingView = nil
+        signalingAccepted = false
+        signalingMediaStarted = false
+        inviteCode = ""
+        peerSummary = ""
+        core?.close()
+        core = nil
+        boundPorts = nil
+    }
+
+    @MainActor
+    private func beginCapture(display: CaptureDisplay,
+                              target: (width: Int, height: Int),
+                              fps: Int,
+                              bitrate: Int) async throws {
+        displayBounds = CGDisplayBounds(CGDirectDisplayID(display.id))
+
+        let injector = MacInputInjector()
+        injector.isTrusted = accessibilityTrusted
+        self.injector = injector
+
+        let encoder = H264Encoder(width: target.width,
+                                  height: target.height,
+                                  fps: fps,
+                                  bitrate: bitrate) { [weak self] output in
+            self?.send(output)
+        }
+        guard encoder.prepare() else {
+            throw HostError.encoderUnavailable
+        }
+        self.encoder = encoder
+
+        counters.reset()
+        nextFrameID = 0
+        lastFPSStamp = CFAbsoluteTimeGetCurrent()
+        fpsAtStamp = 0
+        forceKeyFrame.raise()
+
+        let capture = ScreenCaptureSource()
+        self.capture = capture
+        try await capture.start(displayID: CGDirectDisplayID(display.id),
+                                width: target.width,
+                                height: target.height,
+                                fps: fps) { [weak self] pixelBuffer, timestampUS in
+            guard let self else { return }
+            self.counters.add("captured")
+            _ = self.encoder?.encode(pixelBuffer: pixelBuffer,
+                                     presentationTimeUS: timestampUS,
+                                     forceKeyFrame: self.forceKeyFrame.take())
+        }
+
+        running = true
+        lastError = ""
+        startPolling()
+    }
+
+    @MainActor
     func stop() async {
-        guard running || core != nil else { return }
+        guard running || core != nil || signaling != nil else { return }
+        signalingEpoch += 1
         // Releasing held keys is the last thing that must happen on this machine.
         injector?.releaseAll()
+        signaling?.stop()
+        signaling = nil
+        signalingView = nil
+        signalingAccepted = false
+        signalingMediaStarted = false
+        inviteCode = ""
+        peerSummary = ""
         await cleanup()
         statusText = "已停止"
     }
@@ -241,6 +482,7 @@ final class HostSession: ObservableObject {
 
         running = false
         boundPorts = nil
+        peerSummary = ""
         forceKeyFrame.set(false)
     }
 

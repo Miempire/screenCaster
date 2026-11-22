@@ -9,7 +9,7 @@ import SwiftUI
 struct HostPage: View {
     @ObservedObject var host: HostSession
 
-    @State private var showNetwork = true
+    @State private var showAdvancedDirect = false
     @State private var showStats = true
 
     var body: some View {
@@ -19,7 +19,7 @@ struct HostPage: View {
                     SectionHeader(title: "被控 · 这台 Mac",
                                   subtitle: "允许其他设备连接并控制这台电脑")
                     Spacer()
-                    Badge(text: host.running ? "共享中" : "未共享",
+                    Badge(text: host.running ? "共享中" : (host.inviteCode.isEmpty ? "未共享" : "等待连接"),
                           tint: host.running ? Theme.accent : Theme.dim,
                           fill: host.running ? Theme.accentSoft : Theme.surfaceAlt)
                 }
@@ -27,6 +27,7 @@ struct HostPage: View {
                 HStack(alignment: .top, spacing: 18) {
                     VStack(spacing: 18) {
                         statusCard
+                        codeCard
                         connectionCard
                         displayCard
                         permissionsCard
@@ -75,22 +76,22 @@ struct HostPage: View {
                              ?? host.localVideoPort)
                     portTile(title: "本机控制端口", value: host.boundPorts.map { "\($0.control)" }
                              ?? host.localControlPort)
-                    portTile(title: "对端", value: host.running
-                             ? "\(host.peerAddress):\(host.peerVideoPort)/\(host.peerControlPort)"
-                             : "连接前填写")
+                    portTile(title: "对端", value: host.peerSummary.isEmpty
+                             ? (host.running ? "已连接" : "等待配对")
+                             : host.peerSummary)
                 }
 
                 Button {
-                    if host.running {
+                    if host.running || !host.inviteCode.isEmpty {
                         Task { await host.stop() }
                     } else {
-                        Task { await host.start() }
+                        Task { await host.startSignaling() }
                     }
                 } label: {
                     HStack(spacing: 8) {
-                        Image(systemName: host.running ? "stop.fill" : "play.fill")
+                        Image(systemName: host.running || !host.inviteCode.isEmpty ? "stop.fill" : "play.fill")
                             .font(.system(size: 11, weight: .semibold))
-                        Text(host.running ? "停止共享" : "开始共享")
+                        Text(host.running ? "停止共享" : (host.inviteCode.isEmpty ? "开始共享" : "取消等待"))
                     }
                 }
                 .buttonStyle(AccentButtonStyle(fill: host.running ? Theme.surfaceHigh : Theme.accent,
@@ -103,44 +104,89 @@ struct HostPage: View {
         }
     }
 
-    private var connectionCard: some View {
+    private var codeCard: some View {
         SurfaceCard {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Text("连接信息")
+                    Text("连接码")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Theme.text)
                     Spacer()
-                    Text("C ABI 不会自动学习对端地址")
+                    Badge(text: "服务器 jsspace.xyz", tint: Theme.accent, fill: Theme.accentSoft)
+                }
+
+                if host.inviteCode.isEmpty {
+                    Text(host.running ? "本次会话由直连启动，没有连接码。" : "开始共享后由服务器签发 9 位连接码。")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.dim)
+                } else {
+                    Text(spacedCode(host.inviteCode))
+                        .font(.system(size: 30, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(Theme.text)
+                        .textSelection(.enabled)
+                    Text(host.statusText)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.dim)
+                        .lineLimit(2)
+                }
+
+                HStack {
+                    Text("连接码过期后会自动刷新，也可以手动刷新。")
                         .font(.system(size: 10))
                         .foregroundStyle(Theme.faint)
-                }
-
-                LabeledInput(title: "控制端 IP 地址", text: $host.peerAddress)
-                HStack(alignment: .bottom, spacing: 10) {
-                    LabeledInput(title: "控制端视频端口", text: $host.peerVideoPort, width: 150)
-                    LabeledInput(title: "控制端控制端口", text: $host.peerControlPort, width: 150)
                     Spacer()
-                }
-
-                DisclosureGroup(isExpanded: $showNetwork) {
-                    HStack(alignment: .bottom, spacing: 10) {
-                        LabeledInput(title: "本机视频端口", text: $host.localVideoPort, width: 140)
-                        LabeledInput(title: "本机控制端口", text: $host.localControlPort, width: 140)
-                        Spacer()
+                    Button {
+                        Task { await host.refreshCode() }
+                    } label: {
+                        Label("刷新连接码", systemImage: "arrow.clockwise")
                     }
-                    .padding(.top, 6)
+                    .buttonStyle(QuietButtonStyle(tint: Theme.dim, height: 26))
+                    .disabled(host.running || host.inviteCode.isEmpty)
+                }
+            }
+        }
+    }
+
+    private var connectionCard: some View {
+        SurfaceCard {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("直连（高级）")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.text)
+
+                DisclosureGroup(isExpanded: $showAdvancedDirect) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        LabeledInput(title: "控制端 IP 地址", text: $host.peerAddress)
+                        HStack(alignment: .bottom, spacing: 10) {
+                            LabeledInput(title: "控制端视频端口", text: $host.peerVideoPort, width: 150)
+                            LabeledInput(title: "控制端控制端口", text: $host.peerControlPort, width: 150)
+                            Spacer()
+                        }
+                        HStack(alignment: .bottom, spacing: 10) {
+                            LabeledInput(title: "本机视频端口", text: $host.localVideoPort, width: 140)
+                            LabeledInput(title: "本机控制端口", text: $host.localControlPort, width: 140)
+                            Spacer()
+                        }
+                        Button {
+                            Task { await host.start() }
+                        } label: {
+                            Label("用 IP 直连启动", systemImage: "network")
+                        }
+                        .buttonStyle(QuietButtonStyle(tint: Theme.accent, height: 28))
+                        .disabled(host.running || !host.inviteCode.isEmpty)
+
+                        Text("两端必须使用同一份共享密钥与会话 ID；该模式不经过服务器，端口需要手动对齐。")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Theme.faint)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.top, 8)
                 } label: {
-                    Text("本机监听端口（0 为自动分配）")
+                    Text("不需要服务器，但需要两端手动对齐密钥与端口")
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.dim)
                 }
                 .tint(Theme.dim)
-
-                Text("两端必须使用同一份共享密钥与会话 ID；当前版本不含信令，端口需要手动对齐。")
-                    .font(.system(size: 10))
-                    .foregroundStyle(Theme.faint)
-                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -267,7 +313,7 @@ struct HostPage: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Theme.text)
                 tip("1", "先授予“屏幕录制”和“辅助功能”，再刷新显示器。")
-                tip("2", "填写控制端的 IP 与端口；对端端口要与控制端监听端口一致。")
+                tip("2", "开始共享后把服务器签发的 9 位连接码发给控制端；过期会自动刷新。")
                 tip("3", "控制端接管后会出现输入租约；断开时会自动释放所有按键。")
             }
         }
@@ -309,6 +355,12 @@ struct HostPage: View {
 
     private func rtt(_ value: Double) -> String {
         value >= 0 ? String(format: "%.1f ms", value) : "—"
+    }
+
+    private func spacedCode(_ code: String) -> String {
+        guard code.count == 9 else { return code }
+        let characters = Array(code)
+        return "\(String(characters[0 ..< 3])) \(String(characters[3 ..< 6])) \(String(characters[6 ..< 9]))"
     }
 
     private func bytes(_ count: Int) -> String {

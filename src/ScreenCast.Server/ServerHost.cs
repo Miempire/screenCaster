@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using ScreenCast.Core;
+using ScreenCast.Core.Signaling;
 using ScreenCast.Server.Signaling;
 
 namespace ScreenCast.Server;
@@ -148,7 +149,7 @@ public static class ServerHost
                 Check(created.Text() == "selftest-host", "host id in the view");
                 Check(created.Text() == string.Empty, "no viewer before anyone joins");
                 Check(!sessionId.IsZero, "session id is 16 random bytes");
-                Check(inviteCode.Length == 8, "invite code length");
+                Check(inviteCode.Length == 9 && inviteCode.All(char.IsAsciiDigit), "invite code is nine digits");
                 IPEndPoint? createdHostEndpoint = created.Endpoint();
                 Check(createdHostEndpoint is not null && createdHostEndpoint.Equals(host.LocalEndPoint), "host endpoint from the register source");
                 Pass("create-session");

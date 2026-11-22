@@ -7,10 +7,11 @@
     <!-- Home: remote assistance -->
     <string name="remote_assist">远程协助</string>
     <string name="remote_assist_hint">输入对方设备上的 9 位连接码</string>
+    <string name="server_display">服务器 jsspace.xyz</string>
     <string name="connect">连接</string>
     <string name="disconnect">断开</string>
     <string name="direct_link">使用 IP 地址直连</string>
-    <string name="direct_link_collapse">收起 IP 直连</string>
+    <string name="server_mode">返回服务器配对</string>
     <string name="host_hint">对方 IP 地址</string>
     <string name="video_port_hint">视频端口</string>
     <string name="control_port_hint">控制端口</string>
@@ -44,7 +45,7 @@
     <string name="about_gesture_title">手势操作</string>
     <string name="about_gesture_body">单指拖动移动鼠标，单指点击左键，双指点击右键，双指上下拖动滚轮，双击收起或显示控制条。</string>
     <string name="about_feature_title">连接方式</string>
-    <string name="about_feature_body">通过 9 位连接码连接已保存的设备，或使用 IP 地址直连。视频与控制使用 UDP 点对点传输，负载 AES-256-GCM 加密。</string>
+    <string name="about_feature_body">通过服务器 jsspace.xyz 的 9 位连接码自动配对，或使用 IP 地址直连。视频与控制使用 UDP 点对点传输，负载 AES-256-GCM 加密。</string>
     <string name="about_disclaimer">当前版本不含中继与自动打洞，两台设备需要网络可达。</string>
 
     <!-- Status line -->
@@ -62,6 +63,11 @@
     <string name="port_invalid">端口必须是 1–65535，且不能相同</string>
     <string name="code_required">请输入 9 位连接码</string>
     <string name="code_unknown">本机没有这个连接码，请改用 IP 地址直连</string>
+    <string name="pair_connecting">正在连接服务器 jsspace.xyz…</string>
+    <string name="pair_waiting">已加入会话，正在等待被控端…</string>
+    <string name="pair_code_invalid">连接码无效或已过期</string>
+    <string name="pair_unreachable">服务器不可达，请检查网络</string>
+    <string name="pair_timeout">等待被控端超时，请重试</string>
     <string name="device_saved">已保存设备，连接码 %1$s</string>
     <string name="device_deleted">已删除设备</string>
 

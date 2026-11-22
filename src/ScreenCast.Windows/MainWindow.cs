@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using ScreenCast.Core.Signaling;
 using ScreenCast.Windows.Capture;
 using ScreenCast.Windows.Input;
 using ScreenCast.Windows.Media;
@@ -39,6 +40,21 @@ public sealed class MainWindow : Window
     private readonly TextBox _peerAddress = new() { Width = 160, Text = "127.0.0.1" };
     private readonly TextBox _peerVideoPort = new() { Width = 70, Text = "0" };
     private readonly TextBox _peerControlPort = new() { Width = 70, Text = "0" };
+    private readonly CheckBox _serverMode = new()
+    {
+        Content = "使用服务器配对",
+        IsChecked = true,
+        VerticalAlignment = VerticalAlignment.Center,
+    };
+    private readonly TextBlock _serverLabel = new()
+    {
+        VerticalAlignment = VerticalAlignment.Center,
+        Margin = new Thickness(16, 0, 0, 0),
+        Foreground = Brushes.DimGray,
+    };
+    private readonly TextBox _codeInput = new() { Width = 150, MaxLength = 9, FontSize = 18 };
+    private readonly TextBlock _codeDisplay = new() { FontSize = 24, FontWeight = FontWeights.SemiBold };
+    private readonly StackPanel _directPanel = new() { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
     private readonly TextBlock _status = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 8) };
     private readonly TextBox _log = new()
     {
@@ -61,6 +77,12 @@ public sealed class MainWindow : Window
 
     private HostSession? _host;
     private ViewerSession? _viewer;
+    private SignalingClient? _signaling;
+    private SessionView? _signalingView;
+    private DisplayInfo? _pendingDisplay;
+    private string _inviteCode = string.Empty;
+    private bool _accepted;
+    private bool _mediaStarted;
     private bool _busy;
     private bool _inputEnabled;
     private bool _releasingAll;
@@ -100,6 +122,9 @@ public sealed class MainWindow : Window
             Margin = new Thickness(0, 0, 6, 0),
         });
         titleRow.Children.Add(_role);
+        titleRow.Children.Add(new Border { Width = 12 });
+        titleRow.Children.Add(_serverMode);
+        titleRow.Children.Add(_serverLabel);
         header.Children.Add(titleRow);
         header.Children.Add(_status);
 
@@ -109,17 +134,22 @@ public sealed class MainWindow : Window
         hostPanel.Children.Add(new Border { Width = 8 });
         hostPanel.Children.Add(_start);
 
-        var viewerPanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
-        viewerPanel.Children.Add(new TextBlock { Text = "主机", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) });
-        viewerPanel.Children.Add(_peerAddress);
-        viewerPanel.Children.Add(new TextBlock { Text = "视频端口", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 6, 0) });
-        viewerPanel.Children.Add(_peerVideoPort);
-        viewerPanel.Children.Add(new TextBlock { Text = "控制端口", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 6, 0) });
-        viewerPanel.Children.Add(_peerControlPort);
+        var codePanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
+        codePanel.Children.Add(new TextBlock { Text = "连接码", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) });
+        codePanel.Children.Add(_codeInput);
+        codePanel.Children.Add(_codeDisplay);
+
+        _directPanel.Children.Add(new TextBlock { Text = "主机", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) });
+        _directPanel.Children.Add(_peerAddress);
+        _directPanel.Children.Add(new TextBlock { Text = "视频端口", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 6, 0) });
+        _directPanel.Children.Add(_peerVideoPort);
+        _directPanel.Children.Add(new TextBlock { Text = "控制端口", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 6, 0) });
+        _directPanel.Children.Add(_peerControlPort);
 
         var controls = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
         controls.Children.Add(hostPanel);
-        controls.Children.Add(viewerPanel);
+        controls.Children.Add(codePanel);
+        controls.Children.Add(_directPanel);
         DockPanel.SetDock(controls, Dock.Top);
         root.Children.Add(controls);
 
@@ -132,6 +162,8 @@ public sealed class MainWindow : Window
         root.Children.Add(_videoHost);
 
         _role.SelectionChanged += (_, _) => UpdateRole();
+        _serverMode.Checked += (_, _) => UpdateRole();
+        _serverMode.Unchecked += (_, _) => UpdateRole();
         _refresh.Click += async (_, _) => await RefreshDisplaysAsync();
         _start.Click += async (_, _) => await ToggleSessionAsync();
         _peerVideoPort.TextChanged += (_, _) => UpdateRole();
@@ -189,27 +221,53 @@ public sealed class MainWindow : Window
     private void UpdateRole()
     {
         bool host = IsHostMode;
-        bool running = _host is not null || _viewer is not null;
+        bool server = _serverMode.IsChecked == true;
+        bool running = _host is not null || _viewer is not null || _signaling is not null;
 
+        _serverLabel.Text = $"服务器 {SignalingServerAddress.Host}:{SignalingServerAddress.Port}";
         _displays.Visibility = host ? Visibility.Visible : Visibility.Collapsed;
         _refresh.Visibility = host ? Visibility.Visible : Visibility.Collapsed;
-        _start.Content = host ? "开始共享" : "连接";
-        _start.IsEnabled = !_busy;
-        _peerAddress.IsEnabled = !host && !running;
-        _peerVideoPort.IsEnabled = !host && !running;
-        _peerControlPort.IsEnabled = !host && !running;
+        _start.Content = running ? "断开" : host ? "开始共享" : "连接";
+        _start.IsEnabled = running || !_busy;
+        _serverMode.IsEnabled = !running;
         _role.IsEnabled = !running;
+        _codeInput.Visibility = !host && server ? Visibility.Visible : Visibility.Collapsed;
+        _codeInput.IsEnabled = !running;
+        _codeDisplay.Visibility = host && server ? Visibility.Visible : Visibility.Collapsed;
+        _codeDisplay.Text = host && server
+            ? (_inviteCode.Length == 9 ? FormatCode(_inviteCode) : "点击“开始共享”获取连接码")
+            : string.Empty;
+        _directPanel.Visibility = !host && !server ? Visibility.Visible : Visibility.Collapsed;
+        _peerAddress.IsEnabled = !host && !server && !running;
+        _peerVideoPort.IsEnabled = !host && !server && !running;
+        _peerControlPort.IsEnabled = !host && !server && !running;
 
         if (running)
         {
-            _start.Content = "断开";
-            _start.IsEnabled = true;
+            return;
+        }
+
+        if (server)
+        {
+            _status.Text = host
+                ? "Host：开始共享后显示 9 位连接码，控制端输入该码即可连接。"
+                : "Viewer：输入被控端显示的 9 位连接码，由服务器自动配对。";
             return;
         }
 
         _status.Text = host
-            ? "Host：共享本机桌面并接受远程鼠标键盘。开始后把显示的端口告诉控制端。"
-            : "Viewer：填入主机的视频端口与控制端口后连接。连接成功后在此窗口操作远端。";
+            ? "Host（直连）：共享本机桌面并接受远程鼠标键盘。开始后把 IP 与端口告诉控制端。"
+            : "Viewer（直连）：填入主机的视频端口与控制端口后连接。连接成功后在此窗口操作远端。";
+    }
+
+    private static string FormatCode(string code) =>
+        code.Length == 9 ? $"{code[..3]} {code[3..6]} {code[6..]}" : code;
+
+    private static byte[] SessionBytes(SignalingId id)
+    {
+        byte[] bytes = new byte[SignalingId.Size];
+        id.WriteTo(bytes);
+        return bytes;
     }
 
     private async Task RefreshDisplaysAsync()
@@ -236,22 +294,27 @@ public sealed class MainWindow : Window
 
     private async Task ToggleSessionAsync()
     {
-        if (_host is not null || _viewer is not null)
+        if (_host is not null || _viewer is not null || _signaling is not null)
         {
             ShutdownSession();
             Log("会话已断开。");
             return;
         }
 
+        _busy = true;
+        UpdateRole();
         try
         {
+            bool server = _serverMode.IsChecked == true;
             if (IsHostMode)
             {
-                StartHost();
+                if (server) await StartHostSignalingAsync();
+                else StartHost();
             }
             else
             {
-                StartViewer();
+                if (server) await StartViewerSignalingAsync();
+                else StartViewer();
             }
         }
         catch (Exception ex)
@@ -259,8 +322,11 @@ public sealed class MainWindow : Window
             Log($"启动失败：{ex.GetType().Name}: {ex.Message} (HRESULT 0x{ex.HResult:X8})");
             ShutdownSession();
         }
-
-        await Task.CompletedTask;
+        finally
+        {
+            _busy = false;
+            UpdateRole();
+        }
     }
 
     private void StartHost()
@@ -273,14 +339,7 @@ public sealed class MainWindow : Window
 
         var settings = H264EncoderSettings.Default720p30;
         _host = new HostSession(display, settings, DefaultSecret, DefaultSessionId);
-        _host.StatsUpdated += stats => Dispatcher.BeginInvoke(() =>
-        {
-            var peer = _host?.PeerControl;
-            _status.Text = $"Host 运行中 — 视频端口 {_host!.VideoPort}，控制端口 {_host.ControlPort}　" +
-                (peer is null ? "等待控制端连接…" : $"已连接 {peer}") +
-                $"　采集 {stats.CapturedFrames}，编码 {stats.EncodedFrames}，关键帧 {stats.KeyFrames}，" +
-                $"发送 {stats.SentBytes / 1024} KB，输入租约 {stats.InputLeaseOwner ?? "无"}";
-        });
+        HookHostStats();
 
         // Wait mode: the host binds its ports and streams to whoever shows up. The operator only has
         // to tell the viewer which two ports to connect to, so the host can start first and there is
@@ -314,14 +373,7 @@ public sealed class MainWindow : Window
         }
 
         _viewer = new ViewerSession(DefaultSecret, DefaultSessionId);
-        _viewer.FrameDecoded += (width, height, bgra) => _surface.Present(width, height, bgra);
-        _viewer.StatsUpdated += stats => Dispatcher.BeginInvoke(() =>
-        {
-            _status.Text = $"Viewer 运行中 — {stats.Width}x{stats.Height}，{stats.Fps:F1} fps，" +
-                $"解码 {stats.DecodedFrames}，丢帧 {stats.DroppedFrames}，拒绝 {stats.VideoDatagramsRejected}，" +
-                $"解码渲染 {stats.DecodeRenderMs:F2} ms" +
-                (string.IsNullOrEmpty(stats.LastError) ? string.Empty : $"　错误：{stats.LastError}");
-        });
+        HookViewerStats();
 
         _viewer.Start(new IPEndPoint(address, videoPort), new IPEndPoint(address, controlPort));
         _viewer.SendLease(true);
@@ -331,9 +383,229 @@ public sealed class MainWindow : Window
         UpdateRole();
     }
 
+    private void HookHostStats()
+    {
+        _host!.StatsUpdated += stats => Dispatcher.BeginInvoke(() =>
+        {
+            if (_host is null) return;
+            var peer = _host.PeerControl;
+            _status.Text = $"Host 运行中 — 视频端口 {_host.VideoPort}，控制端口 {_host.ControlPort}　" +
+                (peer is null ? "等待控制端连接…" : $"已连接 {peer}") +
+                $"　采集 {stats.CapturedFrames}，编码 {stats.EncodedFrames}，关键帧 {stats.KeyFrames}，" +
+                $"发送 {stats.SentBytes / 1024} KB，输入租约 {stats.InputLeaseOwner ?? "无"}";
+        });
+    }
+
+    private void HookViewerStats()
+    {
+        _viewer!.FrameDecoded += (width, height, bgra) => _surface.Present(width, height, bgra);
+        _viewer.StatsUpdated += stats => Dispatcher.BeginInvoke(() =>
+        {
+            _status.Text = $"Viewer 运行中 — {stats.Width}x{stats.Height}，{stats.Fps:F1} fps，" +
+                $"解码 {stats.DecodedFrames}，丢帧 {stats.DroppedFrames}，拒绝 {stats.VideoDatagramsRejected}，" +
+                $"解码渲染 {stats.DecodeRenderMs:F2} ms" +
+                (string.IsNullOrEmpty(stats.LastError) ? string.Empty : $"　错误：{stats.LastError}");
+        });
+    }
+
+    private async Task StartHostSignalingAsync()
+    {
+        if (_displays.SelectedItem is not DisplayInfo display)
+        {
+            Log("请先选择一个显示器。");
+            return;
+        }
+
+        string deviceId = DeviceIdentity.GetOrCreate();
+        var client = new SignalingClient(SignalingServerAddress.Host, SignalingServerAddress.Port, deviceId, DeviceRoleRules.All);
+        client.JoinRequested += view => Dispatcher.BeginInvoke(new Action(() => _ = AcceptViewerAsync(client, view)));
+        client.PeerKeyReceived += message => Dispatcher.BeginInvoke(new Action(() => _ = HandleHostPeerKeyAsync(message)));
+        client.SessionClosed += view => Dispatcher.BeginInvoke(new Action(() => HandleSignalingClosed(view)));
+        client.Faulted += exception => Dispatcher.BeginInvoke(new Action(() => Log($"信令错误：{exception.Message}")));
+
+        try
+        {
+            await client.StartAsync();
+            SessionView created = await client.CreateSessionAsync();
+            _signaling = client;
+            _signalingView = created;
+            _pendingDisplay = display;
+            _inviteCode = created.InviteCode;
+            _accepted = false;
+            _mediaStarted = false;
+            Log($"信令已连接 {SignalingServerAddress.Host}:{SignalingServerAddress.Port}，连接码 {FormatCode(_inviteCode)}。");
+            _status.Text = $"等待控制端输入连接码 {FormatCode(_inviteCode)}…";
+            UpdateRole();
+        }
+        catch
+        {
+            await client.DisposeAsync();
+            throw;
+        }
+    }
+
+    private async Task AcceptViewerAsync(SignalingClient client, SessionView request)
+    {
+        if (_signalingView is null || _accepted || _pendingDisplay is null) return;
+        if (!request.SessionId.Equals(_signalingView.SessionId)) return;
+        _accepted = true;
+        try
+        {
+            SessionView accepted = await client.AcceptSessionAsync(request.SessionId);
+            byte[] sessionId = SessionBytes(accepted.SessionId);
+            byte[] secret = SignalingKeys.DeriveMediaSecret(_inviteCode, sessionId);
+            _host = new HostSession(_pendingDisplay, H264EncoderSettings.Default720p30, secret, sessionId);
+            HookHostStats();
+            var info = new PeerMediaInfo(
+                PeerMediaInfo.HostRole,
+                (ushort)_host.VideoPort,
+                (ushort)_host.ControlPort,
+                PeerMediaInfo.LocalIPv4Addresses());
+            await client.SendPeerKeyAsync(SignalingMessageType.PeerKeyOffer, accepted.SessionId, info.Encode());
+            _signalingView = accepted;
+            _status.Text = "控制端已加入，正在交换媒体地址…";
+            Log($"控制端已加入，发送媒体端口 {_host.VideoPort}/{_host.ControlPort}。");
+        }
+        catch (Exception ex)
+        {
+            Log($"接受控制端失败：{ex.Message}");
+            ShutdownSession();
+        }
+    }
+
+    private async Task HandleHostPeerKeyAsync(PeerKeyMessage message)
+    {
+        if (_host is null || _signalingView is null || _mediaStarted) return;
+        if (message.Type != SignalingMessageType.PeerKeyAnswer) return;
+        if (!message.SessionId.Equals(_signalingView.SessionId)) return;
+
+        try
+        {
+            PeerMediaInfo peer = PeerMediaInfo.Decode(message.Payload);
+            IPAddress address = PeerMediaInfo.ChoosePeerAddress(peer, _signalingView.ViewerEndpoint, _signalingView.HostEndpoint);
+            _host.Start(new IPEndPoint(address, peer.VideoPort), new IPEndPoint(address, peer.ControlPort));
+            _mediaStarted = true;
+            Log($"Host 已连接控制端 {address}:{peer.VideoPort}（控制 {peer.ControlPort}）。");
+        }
+        catch (Exception ex)
+        {
+            Log($"媒体连接失败：{ex.Message}");
+            ShutdownSession();
+        }
+
+        await Task.CompletedTask;
+    }
+
+    private async Task StartViewerSignalingAsync()
+    {
+        string code = new string(_codeInput.Text.Where(char.IsAsciiDigit).ToArray());
+        if (code.Length != 9)
+        {
+            Log("请输入 9 位连接码。");
+            return;
+        }
+
+        string deviceId = DeviceIdentity.GetOrCreate();
+        var client = new SignalingClient(SignalingServerAddress.Host, SignalingServerAddress.Port, deviceId, DeviceRoleRules.All);
+        var offered = new TaskCompletionSource<PeerKeyMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        client.PeerKeyReceived += message =>
+        {
+            if (message.Type == SignalingMessageType.PeerKeyOffer) offered.TrySetResult(message);
+        };
+        client.SessionClosed += view => Dispatcher.BeginInvoke(new Action(() => HandleSignalingClosed(view)));
+        client.Faulted += exception => Dispatcher.BeginInvoke(new Action(() => Log($"信令错误：{exception.Message}")));
+
+        try
+        {
+            await client.StartAsync();
+            SessionView joined = await client.JoinSessionAsync(code);
+            _signaling = client;
+            _signalingView = joined;
+            _inviteCode = code;
+            _mediaStarted = false;
+            _status.Text = "已找到被控端，正在交换媒体地址…";
+            Log($"已加入会话，等待主机媒体信息（{SignalingServerAddress.Host}）。");
+
+            PeerKeyMessage offer = await offered.Task.WaitAsync(TimeSpan.FromSeconds(15));
+            await StartViewerMediaAsync(client, joined, offer);
+        }
+        catch
+        {
+            await client.DisposeAsync();
+            throw;
+        }
+    }
+
+    private async Task StartViewerMediaAsync(SignalingClient client, SessionView joined, PeerKeyMessage offer)
+    {
+        PeerMediaInfo host = PeerMediaInfo.Decode(offer.Payload);
+        byte[] sessionId = SessionBytes(joined.SessionId);
+        byte[] secret = SignalingKeys.DeriveMediaSecret(_inviteCode, sessionId);
+        _viewer = new ViewerSession(secret, sessionId);
+        HookViewerStats();
+
+        var info = new PeerMediaInfo(
+            PeerMediaInfo.ViewerRole,
+            (ushort)_viewer.VideoPort,
+            (ushort)_viewer.ControlPort,
+            PeerMediaInfo.LocalIPv4Addresses());
+        await client.SendPeerKeyAsync(SignalingMessageType.PeerKeyAnswer, joined.SessionId, info.Encode());
+
+        IPAddress address = PeerMediaInfo.ChoosePeerAddress(host, joined.HostEndpoint, joined.ViewerEndpoint);
+        _viewer.Start(new IPEndPoint(address, host.VideoPort), new IPEndPoint(address, host.ControlPort));
+        _viewer.SendLease(true);
+        _viewer.RequestKeyFrame();
+        _inputEnabled = true;
+        _mediaStarted = true;
+        Log($"Viewer 已连接 {address}:{host.VideoPort}（控制 {host.ControlPort}）。点击画面后键盘鼠标将转发到远端。");
+        UpdateRole();
+    }
+
+    private void HandleSignalingClosed(SessionView view)
+    {
+        if (_mediaStarted)
+        {
+            Log("信令会话已结束，媒体连接继续。");
+            return;
+        }
+
+        Log("信令会话已关闭。");
+        bool hostWaiting = IsHostMode && _host is null;
+        ShutdownSession();
+        if (hostWaiting)
+        {
+            Log("连接码已过期，正在刷新…");
+            _ = RefreshHostCodeAsync();
+        }
+    }
+
+    private async Task RefreshHostCodeAsync()
+    {
+        try
+        {
+            await StartHostSignalingAsync();
+        }
+        catch (Exception ex)
+        {
+            Log($"刷新连接码失败：{ex.Message}");
+            ShutdownSession();
+        }
+    }
+
     private void ShutdownSession()
     {
         _inputEnabled = false;
+        if (_signaling is not null)
+        {
+            _signaling.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            _signaling = null;
+        }
+
+        _signalingView = null;
+        _inviteCode = string.Empty;
+        _accepted = false;
+        _mediaStarted = false;
+
         if (_viewer is not null)
         {
             try

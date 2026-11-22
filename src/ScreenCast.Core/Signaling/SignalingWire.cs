@@ -5,7 +5,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace ScreenCast.Server.Signaling;
+namespace ScreenCast.Core.Signaling;
 
 /// <summary>
 /// Message kinds. 1..63 are client requests, 128..135 are direct replies, 136..191 are server
@@ -254,6 +254,8 @@ public sealed class SignalingReader
         }
         return endpoints;
     }
+
+    public int Remaining => end - offset;
 
     /// <summary>Rejects trailing bytes so an ambiguous message is never accepted.</summary>
     public void RequireEnd()

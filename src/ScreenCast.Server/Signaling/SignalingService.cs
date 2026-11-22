@@ -1,5 +1,6 @@
 using System.Net;
 using System.Security.Cryptography;
+using ScreenCast.Core.Signaling;
 
 namespace ScreenCast.Server.Signaling;
 
@@ -583,14 +584,22 @@ public sealed class SignalingService
         return !(address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork && address.GetAddressBytes() is [255, 255, 255, 255]);
     }
 
-    private static string NewInviteCode()
+    private string NewInviteCode()
     {
-        const string alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-        byte[] raw = new byte[8];
-        RandomNumberGenerator.Fill(raw);
-        Span<char> code = stackalloc char[8];
-        for (int i = 0; i < code.Length; i++) code[i] = alphabet[raw[i] % alphabet.Length];
-        return new string(code);
+        Span<char> code = stackalloc char[9];
+        for (int attempt = 0; attempt < 100; attempt++)
+        {
+            code[0] = (char)('1' + RandomNumberGenerator.GetInt32(0, 9));
+            for (int i = 1; i < code.Length; i++)
+            {
+                code[i] = (char)('0' + RandomNumberGenerator.GetInt32(0, 10));
+            }
+
+            string value = new(code);
+            if (!invites.ContainsKey(value)) return value;
+        }
+
+        throw new SignalingRequestException(SignalingErrorCode.LimitExceeded, "invite code space exhausted");
     }
 
     private static byte[] Encode(SignalingMessageType type, SignalingId requestId, Action<SignalingWriter> body)

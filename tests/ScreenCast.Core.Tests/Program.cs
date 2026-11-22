@@ -1,8 +1,10 @@
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using ScreenCast.Core;
+using ScreenCast.Core.Signaling;
 
 int passed = 0;
 void Check(bool condition, string label) { if (!condition) throw new Exception(label); }
@@ -152,4 +154,109 @@ Test("loopback UDP Binding IPv4 and IPv6", () =>
         service.GetAwaiter().GetResult();
     }
 });
+Test("HKDF media key known answer", () =>
+{
+    byte[] sessionId = Enumerable.Range(0, 16).Select(index => (byte)index).ToArray();
+    string key = Convert.ToHexString(SignalingKeys.DeriveMediaSecret("123456789", sessionId));
+    Check(key == "9F61E5F76747EB556ECAC57750B7AED28ED013CBE2C57D34796DD512CABABEB2", "cross-language HKDF vector");
+});
+Test("signaling nine-digit invite and peer media exchange", () =>
+{
+    RunSignalingFlowAsync().GetAwaiter().GetResult();
+});
+
 Console.WriteLine($"All {passed} tests passed.");
+
+static async Task RunSignalingFlowAsync()
+{
+    void Check(bool condition, string label) { if (!condition) throw new Exception(label); }
+    byte[] SessionBytes(SignalingId id) { byte[] bytes = new byte[SignalingId.Size]; id.WriteTo(bytes); return bytes; }
+
+    var options = new ScreenCast.Server.SignalingOptions();
+    var service = new ScreenCast.Server.Signaling.SignalingService(options);
+    using var relay = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+    var relayEndpoint = (IPEndPoint)relay.Client.LocalEndPoint!;
+    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+    var stopwatch = Stopwatch.StartNew();
+    Task relayTask = Task.Run(async () =>
+    {
+        while (!timeout.IsCancellationRequested)
+        {
+            UdpReceiveResult datagram;
+            try
+            {
+                datagram = await relay.ReceiveAsync(timeout.Token);
+            }
+            catch (Exception)
+            {
+                return;
+            }
+
+            var outbox = new List<ScreenCast.Server.Signaling.OutboundMessage>();
+            service.Handle(datagram.Buffer, datagram.RemoteEndPoint, stopwatch.ElapsedMilliseconds, outbox);
+            foreach (ScreenCast.Server.Signaling.OutboundMessage message in outbox)
+            {
+                await relay.SendAsync(message.Datagram, message.Destination, timeout.Token);
+            }
+        }
+    });
+
+    await using var host = new SignalingClient(relayEndpoint.Address.ToString(), relayEndpoint.Port, "host-device-1", DeviceRoleRules.All);
+    await using var viewer = new SignalingClient(relayEndpoint.Address.ToString(), relayEndpoint.Port, "viewer-device-1", DeviceRoleRules.All);
+    await host.StartAsync(timeout.Token);
+    await viewer.StartAsync(timeout.Token);
+
+    var joinRequested = new TaskCompletionSource<SessionView>(TaskCreationOptions.RunContinuationsAsynchronously);
+    host.JoinRequested += view => joinRequested.TrySetResult(view);
+
+    SessionView created = await host.CreateSessionAsync(string.Empty, timeout.Token);
+    string code = created.InviteCode;
+    Check(code.Length == 9 && code.All(char.IsAsciiDigit) && code[0] != '0', "nine-digit numeric invite");
+
+    var answered = new TaskCompletionSource<PeerKeyMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+    host.PeerKeyReceived += message =>
+    {
+        if (message.Type == SignalingMessageType.PeerKeyAnswer) answered.TrySetResult(message);
+    };
+    var offered = new TaskCompletionSource<PeerKeyMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+    viewer.PeerKeyReceived += message =>
+    {
+        if (message.Type == SignalingMessageType.PeerKeyOffer) offered.TrySetResult(message);
+    };
+
+    SessionView joined = await viewer.JoinSessionAsync(code, timeout.Token);
+    Check(joined.SessionId.Equals(created.SessionId), "viewer sees the same session id");
+    SessionView request = await joinRequested.Task.WaitAsync(timeout.Token);
+    Check(request.SessionId.Equals(created.SessionId), "host is notified of the join");
+
+    await host.AcceptSessionAsync(created.SessionId, timeout.Token);
+
+    var hostInfo = new PeerMediaInfo(PeerMediaInfo.HostRole, 42000, 42001, new[] { IPAddress.Loopback });
+    await host.SendPeerKeyAsync(SignalingMessageType.PeerKeyOffer, created.SessionId, hostInfo.Encode(), timeout.Token);
+    PeerKeyMessage offer = await offered.Task.WaitAsync(timeout.Token);
+    PeerMediaInfo decodedHost = PeerMediaInfo.Decode(offer.Payload);
+    Check(decodedHost.VideoPort == 42000 && decodedHost.ControlPort == 42001 && decodedHost.IsHost, "offer carries host ports");
+
+    var viewerInfo = new PeerMediaInfo(PeerMediaInfo.ViewerRole, 42100, 42101, new[] { IPAddress.Parse("192.168.1.20") });
+    await viewer.SendPeerKeyAsync(SignalingMessageType.PeerKeyAnswer, created.SessionId, viewerInfo.Encode(), timeout.Token);
+    PeerKeyMessage answer = await answered.Task.WaitAsync(timeout.Token);
+    PeerMediaInfo decodedViewer = PeerMediaInfo.Decode(answer.Payload);
+    Check(decodedViewer.VideoPort == 42100 && decodedViewer.ControlPort == 42101 && !decodedViewer.IsHost, "answer carries viewer ports");
+    Check(decodedViewer.LocalAddresses[0].Equals(IPAddress.Parse("192.168.1.20")), "local candidate survives the round trip");
+
+    byte[] hostSecret = SignalingKeys.DeriveMediaSecret(code, SessionBytes(created.SessionId));
+    byte[] viewerSecret = SignalingKeys.DeriveMediaSecret(code, SessionBytes(joined.SessionId));
+    Check(hostSecret.Length == 32 && hostSecret.SequenceEqual(viewerSecret), "both sides derive the same media secret");
+    Check(!hostSecret.SequenceEqual(new byte[32]), "derived secret is not zero");
+
+    await host.CloseSessionAsync(created.SessionId, timeout.Token).ContinueWith(_ => { }, TaskScheduler.Default);
+    timeout.Cancel();
+    try
+    {
+        await relayTask;
+    }
+    catch (Exception)
+    {
+    }
+}
+

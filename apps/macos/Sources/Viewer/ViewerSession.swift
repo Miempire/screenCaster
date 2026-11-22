@@ -60,6 +60,12 @@ final class ViewerSession: ObservableObject {
     private let counters = CounterBox()
     private var statsTimer: Timer?
 
+    private var signaling: SignalingClient?
+    private var signalingSessionId: SignalingId?
+    private var signalingMediaStarted = false
+    private var signalingEpoch = 0
+    private var offerWaiter: PeerKeyWaiter?
+
     private let keyFrameLock = NSLock()
     private var lastKeyFrameRequest: CFAbsoluteTime = 0
     private var lastDroppedObserved: UInt64 = 0
@@ -94,34 +100,8 @@ final class ViewerSession: ObservableObject {
                              controlAddress: literal, controlPort: hostControl)
             try core.start()
 
-            self.core = core
-            boundPorts = BoundPorts(video: bound.video, control: bound.control)
-
-            let decoder = H264Decoder()
-            decoder.onFrame = { [weak self] sampleBuffer, size in
-                self?.present(sampleBuffer, size: size)
-            }
-            decoder.onError = { [weak self] message in
-                DispatchQueue.main.async { self?.lastError = message }
-            }
-            self.decoder = decoder
-
-            wireSurface()
-            counters.reset()
-            lastDroppedObserved = 0
-            lastFPSStamp = CFAbsoluteTimeGetCurrent()
-            fpsAtStamp = 0
-            stats = ViewerStats()
-
-            connected = true
-            lastError = ""
-            statusText = "已连接 \(literal):\(hostVideo)/\(hostControl)，本机端口 \(bound.video)/\(bound.control)"
-
-            // Take the input lease and force a key frame so the first picture is complete.
-            core.sendControl(.controlLease, body: ControlWire.lease(acquire: true))
-            requestKeyFrame(force: true)
-
-            startPolling()
+            activate(core: core, bound: bound,
+                     status: "已连接 \(literal):\(hostVideo)/\(hostControl)，本机端口 \(bound.video)/\(bound.control)")
         } catch {
             lastError = error.localizedDescription
             statusText = "连接失败"
@@ -133,13 +113,104 @@ final class ViewerSession: ObservableObject {
         }
     }
 
+    @MainActor
+    func connectByCode(_ code: String) async {
+        guard !connected else { return }
+
+        let digits = code.filter { $0.isNumber }
+        guard digits.count == 9, digits.first != "0" else {
+            lastError = "请输入首位非 0 的 9 位连接码。"
+            return
+        }
+
+        disconnectSignaling()
+        lastError = ""
+        statusText = "正在通过 jsspace.xyz 配对…"
+
+        let client = SignalingClient()
+        signaling = client
+        let epoch = signalingEpoch
+        let waiter = client.makePeerKeyWaiter(for: .peerKeyOffer)
+        offerWaiter = waiter
+        client.onSessionClosed = { [weak self] view in
+            guard let self, self.signalingEpoch == epoch else { return }
+            self.handleSignalingClosed(view)
+        }
+        client.onError = { [weak self] error in
+            guard let self, self.signalingEpoch == epoch, !self.connected else { return }
+            self.lastError = error.localizedDescription
+        }
+        client.onFault = { [weak self] error in
+            guard let self, self.signalingEpoch == epoch, !self.connected else { return }
+            self.lastError = error.localizedDescription
+        }
+
+        do {
+            try await client.start()
+            guard signalingEpoch == epoch else { throw SignalingClientError.closed }
+            let joined = try await client.joinSession(code: digits)
+            guard signalingEpoch == epoch else { throw SignalingClientError.closed }
+            signalingSessionId = joined.sessionId
+            statusText = "已找到被控端，正在交换媒体地址…"
+
+            let offer = try await waiter.wait(timeout: SignalingClient.requestTimeout)
+            guard signalingEpoch == epoch else { throw SignalingClientError.closed }
+            offerWaiter = nil
+            guard offer.sessionId == joined.sessionId else {
+                throw SignalingException(code: .malformed, detail: "媒体信息会话不匹配")
+            }
+            guard let host = PeerMediaInfo.decode(Data(offer.payload)) else {
+                throw SignalingException(code: .malformed, detail: "对端媒体信息无效")
+            }
+            guard let address = PeerMediaInfo.choosePeerAddress(peer: host,
+                                                                peerObserved: joined.hostEndpoint,
+                                                                ownObserved: joined.viewerEndpoint) else {
+                throw SignalingException(code: .malformed, detail: "无法确定对端地址")
+            }
+
+            let secret = try MediaKeys.deriveMediaSecret(code: digits, sessionId: joined.sessionId.bytes)
+            let core = try CoreSession(secret: secret, sessionID: joined.sessionId.bytes, isHost: false)
+            let bound = try core.bind(videoPort: 0, controlPort: 0)
+
+            let info = PeerMediaInfo(role: PeerMediaInfo.viewerRole,
+                                     videoPort: bound.video,
+                                     controlPort: bound.control,
+                                     localAddresses: PeerMediaInfo.localIPv4Addresses())
+            try await client.sendPeerKey(type: .peerKeyAnswer,
+                                         sessionId: joined.sessionId,
+                                         payload: Data(info.encode()))
+            guard signalingEpoch == epoch else { throw SignalingClientError.closed }
+
+            try core.setPeer(videoAddress: address, videoPort: host.videoPort,
+                             controlAddress: address, controlPort: host.controlPort)
+            try core.start()
+
+            signalingMediaStarted = true
+            activate(core: core, bound: bound,
+                     status: "已连接 \(address):\(host.videoPort)/\(host.controlPort)，本机端口 \(bound.video)/\(bound.control)")
+        } catch {
+            guard signalingEpoch == epoch else { return }
+            disconnectSignaling()
+            lastError = error.localizedDescription
+            statusText = "连接失败"
+            core?.close()
+            core = nil
+            decoder?.close()
+            decoder = nil
+            boundPorts = nil
+            connected = false
+        }
+    }
+
     func disconnect() {
-        guard core != nil else { return }
+        guard core != nil || signaling != nil else { return }
 
         // Release every key on the remote machine before the session goes away.
         surface.releaseEverything()
         core?.sendControl(.releaseAll)
         core?.sendControl(.controlLease, body: ControlWire.lease(acquire: false))
+
+        disconnectSignaling()
 
         stopFlag.set(true)
         _ = exitSemaphore?.wait(timeout: .now() + 3)
@@ -157,6 +228,59 @@ final class ViewerSession: ObservableObject {
         boundPorts = nil
         connected = false
         statusText = "已断开"
+    }
+
+    private func activate(core: CoreSession, bound: (video: UInt16, control: UInt16), status: String) {
+        self.core = core
+        boundPorts = BoundPorts(video: bound.video, control: bound.control)
+
+        let decoder = H264Decoder()
+        decoder.onFrame = { [weak self] sampleBuffer, size in
+            self?.present(sampleBuffer, size: size)
+        }
+        decoder.onError = { [weak self] message in
+            DispatchQueue.main.async { self?.lastError = message }
+        }
+        self.decoder = decoder
+
+        wireSurface()
+        counters.reset()
+        lastDroppedObserved = 0
+        lastFPSStamp = CFAbsoluteTimeGetCurrent()
+        fpsAtStamp = 0
+        stats = ViewerStats()
+
+        connected = true
+        lastError = ""
+        statusText = status
+
+        core.sendControl(.controlLease, body: ControlWire.lease(acquire: true))
+        requestKeyFrame(force: true)
+
+        startPolling()
+    }
+
+    private func disconnectSignaling() {
+        signalingEpoch += 1
+        signaling?.stop()
+        signaling = nil
+        signalingSessionId = nil
+        signalingMediaStarted = false
+        offerWaiter?.fail(SignalingClientError.closed)
+        offerWaiter = nil
+    }
+
+    private func handleSignalingClosed(_ view: SessionView) {
+        if let current = signalingSessionId, view.sessionId != current { return }
+        if signalingMediaStarted { return }
+        signalingEpoch += 1
+        signaling?.stop()
+        signaling = nil
+        signalingSessionId = nil
+        offerWaiter?.fail(SignalingException(code: .invalidState, detail: "会话已关闭"))
+        offerWaiter = nil
+        lastError = "信令会话已关闭。"
+        statusText = "配对已结束"
     }
 
     // MARK: - Input wiring

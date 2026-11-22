@@ -409,11 +409,14 @@ sc_session_start()
 
 ### 9 位连接码的含义
 
-本版本没有信令服务，连接码**不是服务端签发**的：
+连接码由固定信令服务器 `jsspace.xyz:3479` 签发：
 
-1. 第一次必须用 IP 直连（地址 + 端口）。
-2. 连接成功后 `DeviceBook` 在本机保存设备并生成一个唯一的 9 位码。
-3. 之后输入该码即可连接同一台设备；码只保存在这台 Mac 的 UserDefaults 里，换机不通用。
+1. 被控端点「开始共享」后，服务器生成 9 位数字码（首位非 0），默认 300 秒有效；过期自动换码。
+2. 控制端输入该码，双方注册并加入同一会话，由服务器转发端点与媒体端口。
+3. 媒体密钥由连接码 + 会话 ID 经 HKDF-SHA256 两端各自派生，服务器不接触密钥。
+4. 之后媒体走 UDP 点对点；同一 NAT 内优先内网地址。
+
+连接码不写入 `DeviceBook`，`DeviceBook` 只保存 IP 直连设备。信令实现在 `Sources/Core/SignalingWire.swift`、`SignalingClient.swift`、`MediaKeys.swift`、`PeerMediaInfo.swift`。
 
 ---
 

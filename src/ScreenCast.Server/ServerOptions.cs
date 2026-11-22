@@ -31,7 +31,7 @@ public sealed class SignalingOptions
     public int SessionIdleMs { get; set; } = 45_000;
 
     /// <summary>An unjoined invite (Created state) expires after this long regardless of activity.</summary>
-    public int InviteTimeoutMs { get; set; } = 30_000;
+    public int InviteTimeoutMs { get; set; } = 300_000;
 
     public int ScanIntervalMs { get; set; } = 5_000;
     public int MaxSessionsPerDevice { get; set; } = 2;
@@ -199,7 +199,7 @@ public sealed class ServerOptions
           --no-signal                     Do not open the signaling socket
           --device-lease-seconds <n>      Device lease, default 45
           --session-idle-seconds <n>      Session idle timeout, default 45
-          --invite-seconds <n>            Created-state invite window, default 30
+          --invite-seconds <n>            Created-state invite window, default 300
           --scan-seconds <n>              Cleanup scan interval, default 5
           --heartbeat-seconds <n>         Heartbeat interval reported to devices, default 15
           --max-sessions-per-device <n>   Default 2

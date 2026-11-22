@@ -34,6 +34,8 @@ final class HomeView extends FrameLayout {
     interface Listener {
         void onConnect(DeviceBook.Device device);
 
+        void onPair(String code);
+
         void onDelete(DeviceBook.Device device);
     }
 
@@ -58,7 +60,7 @@ final class HomeView extends FrameLayout {
     private final ImageView[] tabIcons = new ImageView[2];
     private final TextView[] tabLabels = new TextView[2];
 
-    private boolean advancedOpen;
+    private boolean directMode;
     private int currentTab;
     private final Runnable hideNotice;
 
@@ -158,6 +160,13 @@ final class HomeView extends FrameLayout {
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         hintParams.topMargin = UiKit.dp(context, 5);
         hero.addView(hint, hintParams);
+
+        TextView serverLine = UiKit.text(context, context.getString(R.string.server_display), 11,
+                UiKit.ACCENT, true);
+        LinearLayout.LayoutParams serverParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        serverParams.topMargin = UiKit.dp(context, 5);
+        hero.addView(serverLine, serverParams);
 
         LinearLayout.LayoutParams codeParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -409,25 +418,37 @@ final class HomeView extends FrameLayout {
     /* ------------------------------------------------------------------ */
 
     private void toggleAdvanced() {
-        advancedOpen = !advancedOpen;
-        advancedBox.setVisibility(advancedOpen ? View.VISIBLE : View.GONE);
+        directMode = !directMode;
+        advancedBox.setVisibility(directMode ? View.VISIBLE : View.GONE);
         updateDirectToggle();
-        if (advancedOpen) {
+        if (directMode) {
             hostField.requestFocus();
             InputMethodManager manager =
                     (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
             if (manager != null) {
                 manager.showSoftInput(hostField, InputMethodManager.SHOW_IMPLICIT);
             }
+        } else {
+            codeField.focusInput();
         }
     }
 
     private void updateDirectToggle() {
-        directToggle.setText(advancedOpen ? R.string.direct_link_collapse : R.string.direct_link);
+        directToggle.setText(directMode ? R.string.server_mode : R.string.direct_link);
     }
 
     private void submit() {
         String code = codeField.getCode();
+        if (!directMode) {
+            if (code.length() != 9) {
+                showNotice(getContext().getString(R.string.code_required));
+                return;
+            }
+            hideKeyboard();
+            listener.onPair(code);
+            return;
+        }
+
         if (code.length() == 9) {
             DeviceBook.Device device = book.findByCode(code);
             if (device != null) {
@@ -438,7 +459,7 @@ final class HomeView extends FrameLayout {
         }
 
         String host = hostField.getText().toString().trim();
-        if (advancedOpen && !host.isEmpty()) {
+        if (!host.isEmpty()) {
             int videoPort = parsePort(videoPortField);
             int controlPort = parsePort(controlPortField);
             if (videoPort <= 0 || controlPort <= 0 || videoPort == controlPort) {
@@ -453,10 +474,8 @@ final class HomeView extends FrameLayout {
 
         if (code.length() > 0) {
             showNotice(getContext().getString(R.string.code_unknown));
-        } else if (advancedOpen) {
-            showNotice(getContext().getString(R.string.host_invalid));
         } else {
-            showNotice(getContext().getString(R.string.code_required));
+            showNotice(getContext().getString(R.string.host_invalid));
         }
     }
 

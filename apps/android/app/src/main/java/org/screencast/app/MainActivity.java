@@ -20,7 +20,14 @@ import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 
+import java.io.IOException;
+import java.net.InetAddress;
 import java.util.Locale;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * The Android control end. The launcher ({@link HomeView}) owns the device book and the
@@ -30,6 +37,8 @@ import java.util.Locale;
 public final class MainActivity extends Activity {
 
     private static final long KEY_NOTICE_MIN_INTERVAL_MS = 1500;
+    private static final long PAIR_TIMEOUT_MS = 15_000;
+    private static final Object EVENT_SESSION_CLOSED = new Object();
 
     private FrameLayout root;
     private HomeView homeView;
@@ -40,6 +49,9 @@ public final class MainActivity extends Activity {
     private DeviceBook.Device currentDevice;
     private int sessionGeneration;
     private long lastKeyNoticeMs;
+
+    private volatile SignalingClient signaling;
+    private Thread signalingThread;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -67,6 +79,11 @@ public final class MainActivity extends Activity {
             @Override
             public void onConnect(DeviceBook.Device device) {
                 connect(device);
+            }
+
+            @Override
+            public void onPair(String code) {
+                pair(code);
             }
 
             @Override
@@ -188,6 +205,8 @@ public final class MainActivity extends Activity {
     private void connect(DeviceBook.Device device) {
         if (session != null) {
             disconnect(null);
+        } else {
+            stopSignaling();
         }
 
         if (!NativeCore.isLoaded()) {
@@ -199,7 +218,8 @@ public final class MainActivity extends Activity {
         currentDevice = stored;
 
         final int generation = ++sessionGeneration;
-        session = new ViewerSession(stored.host, stored.videoPort, stored.controlPort,
+        session = new ViewerSession(ViewerSession.DEFAULT_SECRET, ViewerSession.DEFAULT_SESSION_ID,
+                stored.host, stored.videoPort, stored.controlPort,
                 new ViewerSession.Listener() {
                     @Override
                     public void onSessionReady(int localVideoPort, int localControlPort) {
@@ -258,6 +278,252 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void pair(String code) {
+        if (session != null) {
+            disconnect(null);
+        } else {
+            stopSignaling();
+        }
+        if (!NativeCore.isLoaded() || !NativeCore.isSessionBridgePresent()) {
+            homeView.showNotice(getString(R.string.native_error));
+            return;
+        }
+
+        final int generation = ++sessionGeneration;
+        final BlockingQueue<Object> events = new ArrayBlockingQueue<>(12);
+        final AtomicBoolean mediaStarted = new AtomicBoolean();
+        SignalingClient client = new SignalingClient(ServerConfig.HOST, ServerConfig.PORT,
+                ServerConfig.deviceId(this), SignalingClient.ROLE_VIEWER,
+                new SignalingClient.Listener() {
+                    @Override
+                    public void onSessionClosed(SignalingClient.SessionInfo view) {
+                        if (!mediaStarted.get()) {
+                            events.offer(EVENT_SESSION_CLOSED);
+                        }
+                    }
+
+                    @Override
+                    public void onPeerKey(SignalingClient.PeerKeyMessage message) {
+                        if (message.type == SignalingWire.PEER_KEY_OFFER) {
+                            events.offer(message);
+                        }
+                    }
+
+                    @Override
+                    public void onFaulted(Throwable error) {
+                        events.offer(error);
+                    }
+                });
+
+        signaling = client;
+        homeView.showNotice(getString(R.string.pair_connecting));
+        signalingThread = new Thread(
+                () -> runPairing(client, code, events, mediaStarted, generation),
+                "screencast-signaling");
+        signalingThread.start();
+    }
+
+    private void runPairing(SignalingClient client, String code, BlockingQueue<Object> events,
+            AtomicBoolean mediaStarted, int generation) {
+        ViewerSession viewer = null;
+        try {
+            client.start();
+            SignalingClient.SessionInfo joined = client.joinSession(code);
+            runOnUiThread(() -> {
+                if (generation == sessionGeneration) {
+                    homeView.showNotice(getString(R.string.pair_waiting));
+                }
+            });
+
+            Object event = awaitEvent(events,
+                    SystemClock.elapsedRealtime() + PAIR_TIMEOUT_MS);
+            if (event == EVENT_SESSION_CLOSED) {
+                throw new PairingException(R.string.pair_code_invalid);
+            }
+            if (event instanceof Throwable) {
+                throw new PairingException(R.string.pair_unreachable);
+            }
+            if (!(event instanceof SignalingClient.PeerKeyMessage)) {
+                throw new PairingException(R.string.pair_timeout);
+            }
+
+            SignalingClient.PeerKeyMessage offer = (SignalingClient.PeerKeyMessage) event;
+            PeerMediaInfo hostMedia = PeerMediaInfo.decode(offer.payload);
+            if (hostMedia == null) {
+                throw new PairingException(R.string.pair_unreachable);
+            }
+            byte[] secret = MediaKeys.deriveMediaSecret(code, joined.sessionId);
+            viewer = new ViewerSession(secret, joined.sessionId, signalingListener(generation));
+
+            String reason = viewer.bindLocal();
+            if (reason != null) {
+                throw new PairingException(R.string.reason_failed,
+                        describeViewerFailure(reason, viewer.lastError()));
+            }
+
+            PeerMediaInfo viewerMedia = new PeerMediaInfo(PeerMediaInfo.VIEWER_ROLE,
+                    viewer.localVideoPort(), viewer.localControlPort(),
+                    PeerMediaInfo.localIPv4Addresses());
+            client.sendPeerKey(SignalingWire.PEER_KEY_ANSWER, joined.sessionId,
+                    viewerMedia.encode());
+            if (events.contains(EVENT_SESSION_CLOSED)) {
+                throw new PairingException(R.string.pair_code_invalid);
+            }
+
+            InetAddress address = PeerMediaInfo.choosePeerAddress(hostMedia, joined.hostEndpoint,
+                    joined.viewerEndpoint);
+            final ViewerSession ready = viewer;
+            final String hostAddress = address.getHostAddress();
+            final int videoPort = hostMedia.videoPort;
+            final int controlPort = hostMedia.controlPort;
+            runOnUiThread(() -> {
+                if (generation != sessionGeneration) {
+                    ready.stop();
+                    return;
+                }
+                installPairing(ready);
+            });
+
+            mediaStarted.set(true);
+            String started = viewer.startMedia(hostAddress, videoPort, controlPort);
+            if (started != null) {
+                mediaStarted.set(false);
+                throw new PairingException(R.string.reason_failed,
+                        describeViewerFailure(started, viewer.lastError()));
+            }
+        } catch (PairingException error) {
+            failPairing(client, viewer, error, generation);
+        } catch (SignalingClient.SignalingException error) {
+            int notice = error.code == SignalingWire.ERROR_NOT_FOUND
+                    || error.code == SignalingWire.ERROR_INVALID_STATE
+                    || error.code == SignalingWire.ERROR_INVITE_INVALID
+                    || error.code == SignalingWire.ERROR_BUSY
+                    ? R.string.pair_code_invalid
+                    : R.string.pair_unreachable;
+            failPairing(client, viewer, new PairingException(notice), generation);
+        } catch (IOException | TimeoutException | InterruptedException error) {
+            failPairing(client, viewer, new PairingException(R.string.pair_unreachable),
+                    generation);
+        } catch (RuntimeException error) {
+            failPairing(client, viewer, new PairingException(R.string.reason_failed,
+                    error.getClass().getSimpleName() + ": " + error.getMessage()), generation);
+        }
+    }
+
+    private static Object awaitEvent(BlockingQueue<Object> events, long deadline)
+            throws InterruptedException {
+        long remaining = deadline - SystemClock.elapsedRealtime();
+        if (remaining <= 0) {
+            return null;
+        }
+        return events.poll(remaining, TimeUnit.MILLISECONDS);
+    }
+
+    private void installPairing(ViewerSession viewer) {
+        session = viewer;
+        signalingThread = null;
+        homeView.setVisibility(View.GONE);
+        sessionView.setVisibility(View.VISIBLE);
+        sessionView.reset();
+        sessionView.setDeviceName(getString(R.string.server_display));
+        sessionView.setStatus(getString(R.string.status_connected,
+                getString(R.string.server_display), viewer.localVideoPort(),
+                viewer.localControlPort()));
+        viewer.setSurface(sessionView.videoView().getHolder().getSurface());
+        homeView.clearCode();
+    }
+
+    private void failPairing(SignalingClient client, ViewerSession viewer, PairingException error,
+            int generation) {
+        if (viewer != null) {
+            viewer.stop();
+        }
+        client.close();
+        String text = error.detail == null
+                ? getString(error.noticeRes)
+                : getString(error.noticeRes, error.detail);
+        runOnUiThread(() -> {
+            if (generation != sessionGeneration) {
+                return;
+            }
+            if (signaling == client) {
+                signaling = null;
+            }
+            signalingThread = null;
+            if (session == viewer) {
+                session = null;
+                sessionGeneration++;
+                sessionView.setVisibility(View.GONE);
+                homeView.setVisibility(View.VISIBLE);
+                homeView.refreshDevices();
+            }
+            homeView.showNotice(text);
+            homeView.focusCode();
+        });
+    }
+
+    private ViewerSession.Listener signalingListener(int generation) {
+        return new ViewerSession.Listener() {
+            @Override
+            public void onSessionReady(int localVideoPort, int localControlPort) {
+            }
+
+            @Override
+            public void onSessionEnded(String reason, String detail) {
+                runOnUiThread(() -> {
+                    if (generation != sessionGeneration) {
+                        return;
+                    }
+                    session = null;
+                    sessionGeneration++;
+                    stopSignaling();
+                    returnHome(reasonText(reason, detail));
+                });
+            }
+
+            @Override
+            public void onStats(SessionStats stats) {
+                runOnUiThread(() -> {
+                    if (generation != sessionGeneration) {
+                        return;
+                    }
+                    sessionView.setStats(stats);
+                });
+            }
+
+            @Override
+            public void onVideoSize(int width, int height) {
+                runOnUiThread(() -> {
+                    if (generation != sessionGeneration) {
+                        return;
+                    }
+                    sessionView.setVideoSize(width, height);
+                });
+            }
+        };
+    }
+
+    private static String describeViewerFailure(String reason, String detail) {
+        if (detail != null && !detail.isEmpty()) {
+            return detail;
+        }
+        return reason;
+    }
+
+    private static final class PairingException extends Exception {
+        final int noticeRes;
+        final String detail;
+
+        PairingException(int noticeRes) {
+            this(noticeRes, null);
+        }
+
+        PairingException(int noticeRes, String detail) {
+            this.noticeRes = noticeRes;
+            this.detail = detail;
+        }
+    }
+
     private void disconnect(String notice) {
         ViewerSession active = session;
         session = null;
@@ -265,7 +531,32 @@ public final class MainActivity extends Activity {
         if (active != null) {
             active.stop();
         }
+        stopSignaling();
         returnHome(notice);
+    }
+
+    private void stopSignaling() {
+        SignalingClient client = signaling;
+        signaling = null;
+        Thread thread = signalingThread;
+        signalingThread = null;
+        if (thread != null) {
+            thread.interrupt();
+        }
+        if (client != null) {
+            new Thread(client::close, "screencast-signaling-close").start();
+        }
+    }
+
+    private boolean pairingInProgress() {
+        Thread thread = signalingThread;
+        return thread != null && thread.isAlive();
+    }
+
+    private void cancelPairing() {
+        stopSignaling();
+        sessionGeneration++;
+        homeView.showNotice(getString(R.string.status_stopped));
     }
 
     private void returnHome(String notice) {
@@ -363,6 +654,10 @@ public final class MainActivity extends Activity {
             disconnect(getString(R.string.status_stopped));
             return;
         }
+        if (pairingInProgress()) {
+            cancelPairing();
+            return;
+        }
         if (homeView.currentTab() != 0) {
             homeView.showDevicesTab();
             return;
@@ -402,6 +697,7 @@ public final class MainActivity extends Activity {
         if (active != null) {
             active.stop();
         }
+        stopSignaling();
         super.onDestroy();
     }
 

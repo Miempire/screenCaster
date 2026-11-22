@@ -1,5 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><TreatWarningsAsErrors>true</TreatWarningsAsErrors></PropertyGroup>
-  <ItemGroup><ProjectReference Include="../../src/ScreenCast.Core/ScreenCast.Core.csproj" /></ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/ScreenCast.Core/ScreenCast.Core.csproj" />
+    <ProjectReference Include="../../src/ScreenCast.Server/ScreenCast.Server.csproj" />
+  </ItemGroup>
   <ItemGroup><Content Include="../../native/tests/vectors/header-v1.hex" Link="header-v1.hex" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
 </Project>

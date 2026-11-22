@@ -49,10 +49,10 @@ final class ViewerSession implements Runnable {
      * Default development credentials, identical to {@code MainWindow.cs} and
      * {@code docs/deployment.md}: the shared secret is 00..1F and the session id A1..B0.
      */
-    private static final byte[] DEFAULT_SECRET = decodeHex(
+    static final byte[] DEFAULT_SECRET = decodeHex(
             "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F");
 
-    private static final byte[] DEFAULT_SESSION_ID = decodeHex("A1A2A3A4A5A6A7A8A9AAABACADAEAFB0");
+    static final byte[] DEFAULT_SESSION_ID = decodeHex("A1A2A3A4A5A6A7A8A9AAABACADAEAFB0");
 
     /** Key epoch; the host uses 1 and both sides must agree. */
     private static final int KEY_EPOCH = 1;
@@ -63,9 +63,11 @@ final class ViewerSession implements Runnable {
     private static final long IDLE_SLEEP_MS = 2;
     private static final int MAX_EVENTS_PER_TURN = 64;
 
-    private final String host;
-    private final int peerVideoPort;
-    private final int peerControlPort;
+    private final byte[] secret;
+    private final byte[] sessionId;
+    private final String directHost;
+    private final int directVideoPort;
+    private final int directControlPort;
     private final Listener listener;
 
     private final long[] pollSlots = new long[NativeCore.POLL_SLOTS];
@@ -76,6 +78,7 @@ final class ViewerSession implements Runnable {
     private final H264Decoder decoder;
 
     private volatile boolean running;
+    private volatile boolean prepared;
     private volatile long handle;
     private Thread thread;
 
@@ -87,10 +90,23 @@ final class ViewerSession implements Runnable {
     private double fps;
     private String lastError = "";
 
-    ViewerSession(String host, int peerVideoPort, int peerControlPort, Listener listener) {
-        this.host = host;
-        this.peerVideoPort = peerVideoPort;
-        this.peerControlPort = peerControlPort;
+    ViewerSession(byte[] secret, byte[] sessionId, Listener listener) {
+        this(secret, sessionId, null, 0, 0, listener);
+    }
+
+    ViewerSession(byte[] secret, byte[] sessionId, String host, int peerVideoPort,
+            int peerControlPort, Listener listener) {
+        if (secret == null || secret.length != 32) {
+            throw new IllegalArgumentException("secret must be 32 bytes");
+        }
+        if (sessionId == null || sessionId.length != 16) {
+            throw new IllegalArgumentException("sessionId must be 16 bytes");
+        }
+        this.secret = secret.clone();
+        this.sessionId = sessionId.clone();
+        this.directHost = host;
+        this.directVideoPort = peerVideoPort;
+        this.directControlPort = peerControlPort;
         this.listener = listener;
         this.decoder = new H264Decoder(new H264Decoder.Callback() {
             @Override
@@ -139,7 +155,11 @@ final class ViewerSession implements Runnable {
             thread = null;
         }
 
-        if (worker == null || worker == Thread.currentThread()) {
+        if (worker == null) {
+            close();
+            return;
+        }
+        if (worker == Thread.currentThread()) {
             return;
         }
 
@@ -149,6 +169,76 @@ final class ViewerSession implements Runnable {
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    int localVideoPort() {
+        synchronized (handleLock) {
+            return localPorts[0];
+        }
+    }
+
+    int localControlPort() {
+        synchronized (handleLock) {
+            return localPorts[1];
+        }
+    }
+
+    String lastError() {
+        return lastError;
+    }
+
+    String bindLocal() {
+        if (!NativeCore.isLoaded()) {
+            return REASON_LIBRARY_MISSING;
+        }
+        if (!NativeCore.isSessionBridgePresent()) {
+            return REASON_BRIDGE_MISSING;
+        }
+        synchronized (handleLock) {
+            if (handle != 0) {
+                return null;
+            }
+        }
+
+        NativeCore.setRole(1);
+        long created = NativeCore.nativeCreate(secret, sessionId, KEY_EPOCH, false);
+        if (created == 0) {
+            return REASON_CREATE_FAILED;
+        }
+        synchronized (handleLock) {
+            handle = created;
+        }
+
+        int bound = NativeCore.nativeBind(created, 0, 0);
+        if (bound <= 0) {
+            lastError = NativeCore.describeStatus(bound);
+            synchronized (handleLock) {
+                handle = 0;
+            }
+            NativeCore.nativeDestroy(created);
+            return REASON_BIND_FAILED;
+        }
+
+        synchronized (handleLock) {
+            if (NativeCore.nativeLocalPorts(created, localPorts) != NativeCore.SC_OK) {
+                localPorts[0] = bound;
+                localPorts[1] = 0;
+            }
+        }
+        return null;
+    }
+
+    String startMedia(String host, int peerVideoPort, int peerControlPort) {
+        if (host == null || host.isEmpty()) {
+            throw new IllegalArgumentException("host is required");
+        }
+        String reason = startNative(host, peerVideoPort, peerControlPort);
+        if (reason != null) {
+            return reason;
+        }
+        prepared = true;
+        start();
+        return null;
     }
 
     /* ------------------------------------------------------------------ */
@@ -214,7 +304,9 @@ final class ViewerSession implements Runnable {
     public void run() {
         String reason = REASON_STOPPED;
         try {
-            reason = open();
+            if (!prepared) {
+                reason = open();
+            }
             if (reason == null) {
                 loop();
                 reason = REASON_STOPPED;
@@ -232,50 +324,39 @@ final class ViewerSession implements Runnable {
 
     /** @return null when the session is up, otherwise the failure reason key */
     private String open() {
-        if (!NativeCore.isLoaded()) {
-            return REASON_LIBRARY_MISSING;
+        String reason = bindLocal();
+        if (reason != null) {
+            return reason;
         }
-        if (!NativeCore.isSessionBridgePresent()) {
-            return REASON_BRIDGE_MISSING;
+        reason = startNative(directHost, directVideoPort, directControlPort);
+        if (reason != null) {
+            return reason;
         }
+        listener.onSessionReady(localVideoPort(), localControlPort());
+        return null;
+    }
 
-        // Process-local role selection, mirroring what the Windows client does on startup.
-        NativeCore.setRole(1);
-
-        long created = NativeCore.nativeCreate(DEFAULT_SECRET, DEFAULT_SESSION_ID, KEY_EPOCH, false);
-        if (created == 0) {
-            return REASON_CREATE_FAILED;
-        }
+    private String startNative(String host, int peerVideoPort, int peerControlPort) {
+        long active;
         synchronized (handleLock) {
-            handle = created;
+            active = handle;
         }
-
-        // Port 0 selects an ephemeral port: the viewer only needs a return path.
-        int bound = NativeCore.nativeBind(created, 0, 0);
-        if (bound <= 0) {
-            lastError = NativeCore.describeStatus(bound);
+        if (active == 0) {
             return REASON_BIND_FAILED;
         }
 
-        int peer = NativeCore.nativeSetPeer(created, host, peerVideoPort, host, peerControlPort);
+        int peer = NativeCore.nativeSetPeer(active, host, peerVideoPort, host, peerControlPort);
         if (peer != NativeCore.SC_OK) {
             lastError = NativeCore.describeStatus(peer);
             return REASON_PEER_FAILED;
         }
 
-        int started = NativeCore.nativeStart(created);
+        int started = NativeCore.nativeStart(active);
         if (started != NativeCore.SC_OK) {
             lastError = NativeCore.describeStatus(started);
             return REASON_START_FAILED;
         }
 
-        if (NativeCore.nativeLocalPorts(created, localPorts) == NativeCore.SC_OK) {
-            listener.onSessionReady(localPorts[0], localPorts[1]);
-        } else {
-            listener.onSessionReady(0, 0);
-        }
-
-        // Take the input lease, then ask for the first key frame so decoding can start.
         sendLease(true);
         requestKeyFrame();
         return null;

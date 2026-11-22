@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using ScreenCast.Core.Signaling;
 
 namespace ScreenCast.Server.Signaling;
 
