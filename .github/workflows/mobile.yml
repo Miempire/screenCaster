@@ -1,0 +1,140 @@
+name: Mobile foundation
+on:
+  workflow_call:
+    secrets:
+      IOS_CERTIFICATE_P12_BASE64:
+        required: false
+      IOS_CERTIFICATE_PASSWORD:
+        required: false
+      IOS_PROVISION_PROFILE_BASE64:
+        required: false
+      IOS_TEAM_ID:
+        required: false
+      IOS_KEYCHAIN_PASSWORD:
+        required: false
+  push:
+    branches: ['**']
+    paths:
+      - 'native/**'
+      - 'apps/android/**'
+      - 'apps/ios/**'
+      - 'scripts/build-android*'
+      - 'scripts/build-ios*'
+      - '.github/workflows/mobile.yml'
+      - 'docs/protocol.md'
+  pull_request:
+    paths:
+      - 'native/**'
+      - 'apps/android/**'
+      - 'apps/ios/**'
+      - 'scripts/build-android*'
+      - 'scripts/build-ios*'
+      - '.github/workflows/mobile.yml'
+      - 'docs/protocol.md'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: mobile-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  rust-checks:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.83.0'
+          components: rustfmt, clippy
+      - name: Rust format, clippy and tests (before mobile builds)
+        run: bash scripts/build-android.sh check
+  android:
+    needs: rust-checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - uses: android-actions/setup-android@v3
+      - name: Install pinned Android packages
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;27.2.12479018'
+      - name: Android lint before compiling native libraries and APK
+        run: bash scripts/build-android.sh lint
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.83.0'
+          targets: aarch64-linux-android,x86_64-linux-android
+          components: clippy
+      - name: Check Android JNI code for both ABIs before native build
+        run: |
+          cargo clippy --manifest-path native/Cargo.toml --locked --target aarch64-linux-android --lib -- -D warnings
+          cargo clippy --manifest-path native/Cargo.toml --locked --target x86_64-linux-android --lib -- -D warnings
+      - name: Install pinned cargo-ndk
+        run: cargo install cargo-ndk --version 3.5.4 --locked
+      - name: Build Rust JNI libraries
+        run: bash scripts/build-android.sh native
+      - name: Assemble debug APK
+        run: bash scripts/build-android.sh apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screencast-android-debug
+          path: apps/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-lint-reports
+          path: apps/android/app/build/reports/lint-results-debug.*
+          if-no-files-found: ignore
+  ios:
+    needs: rust-checks
+    runs-on: macos-14
+    env:
+      IOS_BUNDLE_ID: ${{ vars.IOS_BUNDLE_ID || 'org.screencast.app' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.83.0'
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+      - name: Select Xcode 16.2 for app-store-connect export support
+        run: sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Build device and universal simulator XCFramework
+        run: bash scripts/build-ios.sh framework
+      - name: Check simulator build
+        run: bash scripts/build-ios.sh simulator
+      - name: Create unsigned device archive
+        run: bash scripts/build-ios.sh archive
+      - name: Export TestFlight-compatible IPA when signing secrets are complete
+        if: github.event_name != 'pull_request'
+        env:
+          IOS_CERTIFICATE_P12_BASE64: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_PROVISION_PROFILE_BASE64: ${{ secrets.IOS_PROVISION_PROFILE_BASE64 }}
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+          IOS_KEYCHAIN_PASSWORD: ${{ secrets.IOS_KEYCHAIN_PASSWORD }}
+        run: bash scripts/build-ios-export.sh
+      - name: Package unsigned archive and XCFramework preserving metadata
+        run: |
+          ditto -c -k --keepParent apps/ios/build/ScreenCast-unsigned.xcarchive apps/ios/build/ScreenCast-unsigned.xcarchive.zip
+          ditto -c -k --keepParent apps/ios/Frameworks/ScreenCastCore.xcframework apps/ios/build/ScreenCastCore.xcframework.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screencast-ios-foundation
+          path: |
+            apps/ios/build/ScreenCast-unsigned.xcarchive.zip
+            apps/ios/build/ScreenCastCore.xcframework.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screencast-ios-ipa
+          path: apps/ios/build/ipa/*.ipa
+          if-no-files-found: ignore
+# This workflow uploads CI artifacts only. Release publishing is owned separately.

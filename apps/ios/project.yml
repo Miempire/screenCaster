@@ -1,0 +1,39 @@
+name: ScreenCast
+options:
+  bundleIdPrefix: org.screencast
+  deploymentTarget:
+    iOS: '16.0'
+settings:
+  base:
+    SWIFT_VERSION: '5.0'
+    IPHONEOS_DEPLOYMENT_TARGET: '16.0'
+    MARKETING_VERSION: '0.1.0'
+    CURRENT_PROJECT_VERSION: '1'
+targets:
+  ScreenCast:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ${IOS_BUNDLE_ID}
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: ScreenCast
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        TARGETED_DEVICE_FAMILY: '1,2'
+        SUPPORTS_MACCATALYST: NO
+        OTHER_LDFLAGS: ['$(inherited)', '-liconv', '-lresolv']
+    dependencies:
+      - framework: Frameworks/ScreenCastCore.xcframework
+        embed: false
+schemes:
+  ScreenCast:
+    build:
+      targets:
+        ScreenCast: all
+    run:
+      config: Debug
+    archive:
+      config: Release

@@ -1,0 +1,32 @@
+# Build outputs
+**/bin/
+**/obj/
+**/publish/
+artifacts/
+.vs/
+.idea/
+**/target/
+**/.gradle/
+**/build/
+**/local.properties
+**/xcuserdata/
+**/.DS_Store
+apps/ios/Generated/
+apps/ios/Frameworks/
+# Local reference archives and deployment details
+preference/
+p2p Server Info/
+Client for Android/
+Client for Windows/
+Client for Mac-arm/
+Client for Mac-x64/
+Server Software/
+temp/
+# Signing and secrets
+*.pfx
+*.p12
+*.mobileprovision
+*.keystore
+.env
+.env.*
+!.env.example

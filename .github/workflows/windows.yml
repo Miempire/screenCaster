@@ -1,0 +1,47 @@
+name: Windows build and validation
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Restore solution
+        run: dotnet restore ScreenCast.sln
+      - name: Verify formatting
+        run: dotnet format ScreenCast.sln --verify-no-changes --no-restore --include src tests
+      - name: Build solution
+        run: dotnet build ScreenCast.sln --configuration Release --no-restore
+      - name: Core console tests
+        run: dotnet run --project tests/ScreenCast.Core.Tests/ScreenCast.Core.Tests.csproj --configuration Release --no-build
+      - name: Transport and end-to-end session tests
+        run: dotnet run --project tests/ScreenCast.Transport.Tests/ScreenCast.Transport.Tests.csproj --configuration Release --no-build
+      - name: Server signaling self-test (real UDP clients)
+        run: dotnet run --project src/ScreenCast.Server/ScreenCast.Server.csproj --configuration Release --no-build -- --self-test
+      - name: Publish unified Windows client
+        run: dotnet publish src/ScreenCast.Windows/ScreenCast.Windows.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=embedded --output artifacts/windows-client
+      - name: Publish Windows server
+        run: dotnet publish src/ScreenCast.Server/ScreenCast.Server.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=embedded --output artifacts/windows-server
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screencast-windows-client-win-x64
+          path: artifacts/windows-client/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screencast-windows-server-win-x64
+          path: artifacts/windows-server/
+          if-no-files-found: error

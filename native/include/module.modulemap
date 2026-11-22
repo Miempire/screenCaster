@@ -1,0 +1,4 @@
+module ScreenCastCore {
+    header "screencast_core.h"
+    export *
+}

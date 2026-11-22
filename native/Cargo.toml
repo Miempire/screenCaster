@@ -1,0 +1,21 @@
+[package]
+name = "screencast-core"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.83"
+license = "MIT"
+description = "ScreenCast network core: SCT1 framing, AES-256-GCM, reliable control channel, video reassembly, UDP media session and C ABI"
+readme = "README.md"
+
+[lib]
+name = "screencast_core"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { version = "=0.21.1", default-features = false }
+
+[profile.release]
+panic = "abort"
+strip = "debuginfo"
+lto = true
+codegen-units = 1

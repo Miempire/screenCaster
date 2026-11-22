@@ -1,0 +1,40 @@
+name: Tag release artifacts
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  windows:
+    uses: ./.github/workflows/windows.yml
+  mobile:
+    uses: ./.github/workflows/mobile.yml
+    secrets: inherit
+  macos:
+    uses: ./.github/workflows/macos.yml
+  release:
+    needs: [windows, mobile, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+      - name: Package each artifact
+        shell: bash
+        run: |
+          mkdir -p release-bundles
+          for directory in release-artifacts/*; do
+            [ -d "$directory" ] || continue
+            name=$(basename "$directory")
+            tar -czf "release-bundles/${name}.tar.gz" -C "$directory" .
+          done
+      - name: Create tagged release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          gh release create "$TAG" release-bundles/* --verify-tag --generate-notes --title "$TAG" --draft

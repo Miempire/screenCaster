@@ -1,0 +1,63 @@
+name: macOS client
+on:
+  workflow_call:
+  push:
+    branches: ['**']
+    paths:
+      - 'native/**'
+      - 'apps/macos/**'
+      - 'scripts/build-macos.sh'
+      - 'docs/protocol.md'
+      - '.github/workflows/macos.yml'
+  pull_request:
+    paths:
+      - 'native/**'
+      - 'apps/macos/**'
+      - 'scripts/build-macos.sh'
+      - 'docs/protocol.md'
+      - '.github/workflows/macos.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: x64
+            mode: app-x64
+            artifact: screencast-macos-x64
+          - name: universal
+            mode: app
+            artifact: screencast-macos-universal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.83.0'
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Build Rust core and XCFramework for both architectures
+        run: bash scripts/build-macos.sh framework
+      - name: Build ${{ matrix.name }} app
+        run: bash scripts/build-macos.sh ${{ matrix.mode }}
+      - name: Verify architectures and exported symbols
+        run: bash scripts/build-macos.sh verify
+      - name: Package app bundle
+        run: |
+          ditto -c -k --keepParent \
+            apps/macos/build/DerivedData/Build/Products/Debug/ScreenCast.app \
+            apps/macos/build/ScreenCast-${{ matrix.name }}.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: apps/macos/build/ScreenCast-${{ matrix.name }}.zip
+          if-no-files-found: error
+# Builds only: the app needs Screen Recording and Accessibility permissions, so the UI cannot be
+# exercised on a CI runner. Artifacts are ad-hoc signed (CODE_SIGN_IDENTITY "-").

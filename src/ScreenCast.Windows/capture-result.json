@@ -1,0 +1,29 @@
+{
+  "status": "diagnostic-completed",
+  "streamingImplemented": false,
+  "mode": "host",
+  "displays": [
+    {
+      "AdapterIndex": 0,
+      "OutputIndex": 0,
+      "AdapterLuid": 62122,
+      "AdapterName": "NVIDIA GeForce RTX 5060",
+      "DeviceName": "\\\\.\\DISPLAY1",
+      "Left": 0,
+      "Top": 0,
+      "Width": 2560,
+      "Height": 1440,
+      "Rotation": "Identity"
+    }
+  ],
+  "frame": {
+    "Display": "\\\\.\\DISPLAY1",
+    "Width": 2560,
+    "Height": 1440,
+    "Format": "B8G8R8A8_UNorm",
+    "AccumulatedFrames": 1,
+    "DirtyRectCount": 1,
+    "MoveRectCount": 0,
+    "LastPresentTime": 250101708872
+  }
+}

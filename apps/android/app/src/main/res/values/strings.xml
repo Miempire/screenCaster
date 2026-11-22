@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ScreenCast</string>
+    <string name="app_subtitle">安全点对点远程桌面</string>
+    <string name="logo_letter">S</string>
+
+    <!-- Home: remote assistance -->
+    <string name="remote_assist">远程协助</string>
+    <string name="remote_assist_hint">输入对方设备上的 9 位连接码</string>
+    <string name="connect">连接</string>
+    <string name="disconnect">断开</string>
+    <string name="direct_link">使用 IP 地址直连</string>
+    <string name="direct_link_collapse">收起 IP 直连</string>
+    <string name="host_hint">对方 IP 地址</string>
+    <string name="video_port_hint">视频端口</string>
+    <string name="control_port_hint">控制端口</string>
+    <string name="default_video_port" translatable="false">42000</string>
+    <string name="default_control_port" translatable="false">42001</string>
+    <string name="direct_hint">首次连接用 IP 直连；连接成功后自动保存为设备并生成连接码。</string>
+    <string name="code_hint">连接码</string>
+
+    <!-- Home: devices -->
+    <string name="devices_title">我的设备</string>
+    <string name="devices_count">%1$d 台</string>
+    <string name="devices_empty_title">还没有设备</string>
+    <string name="devices_empty_body">用 IP 地址连接成功后，设备会保存在这里。</string>
+    <string name="device_connect">连接</string>
+    <string name="device_last_used">上次连接 %1$s</string>
+    <string name="device_code">连接码 %1$s</string>
+    <string name="device_delete_hint">长按卡片可删除设备</string>
+    <string name="header_badge">本机</string>
+    <string name="device_delete_title">删除设备</string>
+    <string name="cancel">取消</string>
+    <string name="delete">删除</string>
+
+    <!-- Bottom navigation -->
+    <string name="tab_devices">设备</string>
+    <string name="tab_about">我的</string>
+
+    <!-- About -->
+    <string name="about_title">关于</string>
+    <string name="about_version">版本 %1$s · Rust 核心 %2$s</string>
+    <string name="core_missing">未加载</string>
+    <string name="about_gesture_title">手势操作</string>
+    <string name="about_gesture_body">单指拖动移动鼠标，单指点击左键，双指点击右键，双指上下拖动滚轮，双击收起或显示控制条。</string>
+    <string name="about_feature_title">连接方式</string>
+    <string name="about_feature_body">通过 9 位连接码连接已保存的设备，或使用 IP 地址直连。视频与控制使用 UDP 点对点传输，负载 AES-256-GCM 加密。</string>
+    <string name="about_disclaimer">当前版本不含中继与自动打洞，两台设备需要网络可达。</string>
+
+    <!-- Status line -->
+    <string name="status_connecting">正在连接 %1$s…</string>
+    <string name="status_connected">已连接 %1$s · 本机端口 %2$d / %3$d</string>
+    <string name="status_stopped">已断开</string>
+    <string name="reason_failed">连接失败（%1$s）</string>
+    <string name="reason_create_failed">会话创建失败：密钥或会话 ID 被拒绝</string>
+    <string name="reason_library_missing">原生库未加载：请先构建并打包对应 ABI 的 libscreencast_core.so</string>
+    <string name="reason_bridge_missing">原生 JNI 会话层缺失：见 apps/android/native-jni/README.md</string>
+    <string name="native_error">Rust 原生核心加载失败：请先构建并打包对应 ABI 的 libscreencast_core.so</string>
+
+    <!-- Validation -->
+    <string name="host_invalid">请输入对方 IP 地址</string>
+    <string name="port_invalid">端口必须是 1–65535，且不能相同</string>
+    <string name="code_required">请输入 9 位连接码</string>
+    <string name="code_unknown">本机没有这个连接码，请改用 IP 地址直连</string>
+    <string name="device_saved">已保存设备，连接码 %1$s</string>
+    <string name="device_deleted">已删除设备</string>
+
+    <!-- Session chrome -->
+    <string name="session_keyboard">键盘</string>
+    <string name="session_stats">统计</string>
+    <string name="session_chrome">面板</string>
+    <string name="session_back">返回</string>
+    <string name="session_latency">%1$.0f ms</string>
+    <string name="session_latency_none">— ms</string>
+
+    <!-- Statistics -->
+    <string name="stats_waiting">等待第一帧…</string>
+    <string name="stats_line_resolution">%1$d × %2$d · %3$.1f fps</string>
+    <string name="stats_line_rtt">延迟 %1$s</string>
+    <string name="stats_line_drops">丢帧 %1$d · 拒绝 %2$d</string>
+    <string name="rtt_format">%.1f ms</string>
+    <string name="rtt_unknown">—</string>
+    <string name="path_probing">通路探测中</string>
+    <string name="path_alive">通路正常</string>
+    <string name="path_down">通路中断</string>
+
+    <!-- Honest reporting of input that cannot be forwarded -->
+    <string name="key_unsupported">该键没有对应的 PC 扫描码，已忽略：%1$s</string>
+    <string name="text_unsupported">文本输入没有扫描码，已忽略：%1$s</string>
+</resources>
