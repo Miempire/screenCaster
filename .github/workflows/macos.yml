@@ -48,7 +48,14 @@ jobs:
       - name: Build Rust core and XCFramework for both architectures
         run: bash scripts/build-macos.sh framework
       - name: Build ${{ matrix.name }} app
-        run: bash scripts/build-macos.sh ${{ matrix.mode }}
+        run: |
+          set -o pipefail
+          if ! bash scripts/build-macos.sh ${{ matrix.mode }} 2>&1 | tee build.log; then
+            grep -nE "error:|fatal error|BUILD FAILED|xcodebuild: error|The following build commands failed" build.log \
+              | head -n 40 \
+              | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          fi
       - name: Verify architectures and exported symbols
         run: bash scripts/build-macos.sh verify
       - name: Package app bundle
