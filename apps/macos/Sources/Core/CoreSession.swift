@@ -266,8 +266,8 @@ final class CoreSession {
             controlRTTMicroseconds: raw.control_rtt_us,
             videoPathStatus: raw.video_path_status,
             controlPathStatus: raw.control_path_status,
-            videoLocalPort: raw.video_local_port,
-            controlLocalPort: raw.control_local_port)
+            videoLocalPort: UInt16(truncatingIfNeeded: raw.video_local_port),
+            controlLocalPort: UInt16(truncatingIfNeeded: raw.control_local_port))
     }
 }
 

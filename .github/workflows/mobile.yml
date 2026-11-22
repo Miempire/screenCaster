@@ -72,9 +72,12 @@ jobs:
         run: |
           set -o pipefail
           if ! bash scripts/build-android.sh lint 2>&1 | tee lint.log; then
-            grep -nE "FAILURE:|What went wrong|Execution failed|error:|Lint found|> Task .*FAILED" lint.log \
-              | head -n 40 \
-              | while IFS= read -r line; do echo "::error::$line"; done
+            REPORT=apps/android/app/build/reports/lint-results-debug.txt
+            if [ -f "$REPORT" ]; then
+              head -n 60 "$REPORT" | while IFS= read -r line; do echo "::error::$line"; done
+            else
+              tail -n 60 lint.log | while IFS= read -r line; do echo "::error::$line"; done
+            fi
             exit 1
           fi
       - uses: dtolnay/rust-toolchain@master
@@ -89,9 +92,19 @@ jobs:
       - name: Install pinned cargo-ndk
         run: cargo install cargo-ndk --version 3.5.4 --locked
       - name: Build Rust JNI libraries
-        run: bash scripts/build-android.sh native
+        run: |
+          set -o pipefail
+          if ! bash scripts/build-android.sh native 2>&1 | tee native.log; then
+            tail -n 60 native.log | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          fi
       - name: Assemble debug APK
-        run: bash scripts/build-android.sh apk
+        run: |
+          set -o pipefail
+          if ! bash scripts/build-android.sh apk 2>&1 | tee apk.log; then
+            tail -n 60 apk.log | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: screencast-android-debug

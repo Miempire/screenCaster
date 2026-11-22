@@ -76,19 +76,7 @@ final class ScreenCaptureSource: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     private static func shareableContent() async throws -> SCShareableContent {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<SCShareableContent, Error>) in
-            SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true) { content, error in
-                if let error {
-                    continuation.resume(throwing: CaptureError.shareableContentFailed(error.localizedDescription))
-                    return
-                }
-                guard let content else {
-                    continuation.resume(throwing: CaptureError.noDisplay)
-                    return
-                }
-                continuation.resume(returning: content)
-            }
-        }
+        try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
     }
 
     /// Computes the encode/capture size: the display's aspect ratio, capped on the long edge, with
