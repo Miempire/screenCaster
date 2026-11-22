@@ -9,8 +9,8 @@
 网络层不是重新实现的：直接用 `native/` 的 Rust 静态库，通过 `native/include/screencast_core.h`
 的 14 个 C 函数驱动。协议逐字节由 Rust 核心保证与 Windows 端一致。
 
-> **状态：界面已按 UU 远程风格重写，Intel（x86_64）构建已加入工程与脚本，并由 GitHub Actions
-> 编译。** 本地不是 macOS，代码尚未在真实窗口里运行过；见文末「未验证声明」。
+> **状态：界面已按 UU 远程风格重写；GitHub Actions 已编译通过 x64 与 universal 两个 App。**
+> 还没有在真实 macOS 桌面上运行过界面；见文末「未验证声明」。
 
 ---
 
@@ -480,28 +480,26 @@ Bundle id 默认 `org.screencast.macos`，可用 `MACOS_BUNDLE_ID=...` 覆盖。
 
 ## 10. 未验证声明
 
-**本机不是 macOS，这份代码没有编译过，也没有运行过。**
+**已在 GitHub Actions 上编译通过，但没有在真实 macOS 桌面上运行过。**
 
-本轮做过的检查：
+本轮验证（提交 `532f622`）：
 
-* 用 tree-sitter-swift 逐个解析 `Sources/**/*.swift`，全部无 `ERROR` 节点（只证明语法正确，
-  **不是类型检查**）。
-* `project.yml` 显式设置 `ARCHS: 'arm64 x86_64'`、`ONLY_ACTIVE_ARCH: NO`，
-  `scripts/build-macos.sh` 增加 `app-x64` / `app-arm64`；本地没有执行过。
-* 新增 `.github/workflows/macos.yml`，由 `macos-15-intel`（x64）与 `macos-15`（universal）实际
-  执行 `xcodegen` / `xcodebuild` / `lipo` 并上传产物。**这个工作流还没有完整跑通**，Swift 类型
-  错误要等 CI 运行才能暴露。
-* 新界面（侧栏四页、9 位码输入、会话悬浮条）只做了静态审阅，没有在窗口里渲染过。
+* `macOS client` 工作流的两个矩阵任务都成功：`macos-15-intel` 产出 `screencast-macos-x64`
+  （1.33 MB），`macos-15` 产出 `screencast-macos-universal`（2.65 MB）。
+* `verify` 打印了 universal 静态库、14 个 `sc_` 导出符号、xcframework 布局与 App 架构。
+* 编译过程中发现并修掉三个真实问题：
+  1. `macos-14`  runner 标签已退役 → 改用 `macos-15-intel`（x64）与 `macos-15`（universal）。
+  2. xcframework 与 `native/include/module.modulemap` 重复声明 `ScreenCastCore` module →
+     App 改为直接链接 `build/universal/libscreencast_core.a`。
+  3. `VTDecompressionSessionCreate` 的 Swift 标签实际是 `decoderSpecification:` /
+     `imageBufferAttributes:`，不是头文件里的内部参数名。
+* tree-sitter-swift 语法解析全部通过。
 
-以下全部**未经执行验证**：
+以下仍然**未经执行验证**：
 
-* 没有跑过 `xcodebuild`、`swiftc`、`xcodegen`。本机没有 Swift 工具链，`swiftc -parse` 也做不了。
-* 没有 `lipo` / `xcodebuild -create-xcframework` 过（本机没有这些工具）。
-* 所有 VideoToolbox / ScreenCaptureKit / CGEvent / AVFoundation 的 API 名称与签名是**按 Apple
-  文档和公开 SDK 头写的**，没有经过编译器检查。可能存在：
-  * 某个 Swift 侧导入名与真实 SDK 不一致（例如 `VTDecompressionOutputCallbackRecord` 的字段名）；
-  * 某个属性在目标 SDK 上不可用；
-  * `CMVideoFormatDescription` / `CMFormatDescription` 的类型别名假设不成立。
+* 界面没有在真实窗口里渲染过；布局、悬浮条、9 位码输入都没有肉眼确认。
+* 屏幕录制 / 辅助功能授权流程、CGEvent 注入、ScreenCaptureKit 采集与 VideoToolbox 编解码
+  都没有实机跑过，只保证能编译、能链接。
 * 协议互操作性（与 Windows 端真机对跑）**没有验证**。
 * 键位映射表逐条手写，**没有在真机上按键验证**，尤其 `Help → Insert`、`KP /`、`KP Enter`、
   Right Option/Control 的 E0 组合。
@@ -512,11 +510,11 @@ Bundle id 默认 `org.screencast.macos`，可用 `MACOS_BUNDLE_ID=...` 覆盖。
   完成回调签名，都按文档写，未实测。
 * 辅助功能与屏幕录制的 TCC 行为（ad-hoc 签名下是否重新弹窗）未实测。
 
-**首次在 macOS 上构建时，最可能出问题的地方按概率排序**：
+**首次真机运行时，最可能出问题的地方按概率排序**：
 
-1. `H264Decoder` / `H264Encoder` 里 VideoToolbox 回调结构的字段名与 Swift 导入形式；
-2. `ScreenCaptureSource` 里 `SCStreamFrameInfo.status` 附件字典的桥接；
-3. `CoreSession` 里 `sc_session_t *` 导入成 `OpaquePointer` 的可选性细节；
+1. `H264Encoder` / `ScreenCaptureSource` 里 VideoToolbox 与 ScreenCaptureKit 的运行时行为；
+2. `MacInputInjector` 的坐标换算与 TCC 授权；
+3. `CoreSession` 里 Rust 会话的绑定 / 对端设置顺序；
 4. `HostResolver` 里 `getaddrinfo` / `getnameinfo` 的指针参数。
 
 ---

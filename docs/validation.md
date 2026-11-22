@@ -327,14 +327,36 @@ rustfmt --check                                                     干净
 | Android 新增/重写 | `UiKit`、`CodeFieldView`、`DeviceBook`、`HomeView`、`SessionView`，重写 `MainActivity`、`strings.xml`、图标 |
 | Android 编译 | 真实 API 35 `android.jar` + `javac --release 17 -Xlint:all`：**0 error / 0 warning** |
 | Android 资源 | 脚本核对 `strings.xml` 与 `drawable/*` 的引用，无未使用项；删除 `ic_link.xml`、`ic_chevron.xml` |
-| Android lint/APK | **已重跑**：Gradle 8.10.2 + AGP 8.7.3 执行 `lintDebug assembleDebug`，BUILD SUCCESSFUL，lint **No issues found**；APK 94 KB（本机无 NDK，不含 `.so`，CI 打包时带上） |
+| Android lint/APK | 本地 Gradle 8.10.2 + AGP 8.7.3 `lintDebug assembleDebug` 通过；CI `android` job 全绿，产物 `screencast-android-debug` **0.53 MB**（含两个 ABI 的 `.so`） |
 | macOS 新增/重写 | `Theme`、`DeviceBook`、`SettingsPanel`，重写 `ScreenCastMacApp`、`SharedViews`、`ViewerPanel`、`HostPanel` |
 | macOS 语法 | tree-sitter-swift 解析 `Sources/**/*.swift` 全部无 `ERROR` 节点（**仅语法**，不是类型检查） |
 | macOS x64 | `project.yml` 固定 `ARCHS: 'arm64 x86_64'`、`ONLY_ACTIVE_ARCH: NO`；`build-macos.sh` 增加 `app-x64` / `app-arm64` |
-| macOS 编译 | 本地**未执行** `xcodegen` / `xcodebuild` / `lipo`；新增 `.github/workflows/macos.yml`，推送到 GitHub 后在 `macos-15-intel` 上编译 **x64**、`macos-15` 上编译 **universal** 并上传产物，`release.yml` 已把 macOS 纳入发布 |
+| macOS 编译 | **CI 已通过**：`macos-15-intel` 产出 `screencast-macos-x64`（1.33 MB），`macos-15` 产出 `screencast-macos-universal`（2.65 MB）；未在真实桌面上运行界面 |
 
 两端使用同一套令牌：背景 `#0E1014`、卡片 `#161A20`、主色 `#00D26A`、弱化 `#8D94A3`。连接码是
 本机设备簿生成的本地快捷码（IP 直连成功后保存并生成），不是服务端签发，两端 README 都写明了这一点。
+
+### CI 实测（提交 532f622）
+
+| 工作流 / Job | 结果 |
+|---|---|
+| Windows build and validation | 成功，两个 Windows 产物 |
+| Mobile foundation / rust-checks | 成功 |
+| Mobile foundation / android | 成功，`screencast-android-debug` **0.53 MB** |
+| Mobile foundation / ios | 成功，`screencast-ios-foundation` 17.59 MB |
+| macOS client / x64（macos-15-intel） | 成功，`screencast-macos-x64` **1.33 MB** |
+| macOS client / universal（macos-15） | 成功，`screencast-macos-universal` **2.65 MB** |
+
+CI 暴露并修复的问题：
+
+* `macos-14` runner 标签已退役，job 一启动就被取消 → 换成 `macos-15-intel` / `macos-15`。
+* xcframework 与 `native/include/module.modulemap` 重复声明 `ScreenCastCore` module，
+  bridging header 的 PCH 报 `redefinition of module` → App 改为直接链接 universal `.a`。
+* `VTDecompressionSessionCreate` 的 Swift 标签实际是 `decoderSpecification:` /
+  `imageBufferAttributes:`，原代码用的是头文件内部参数名。
+* CI 的 SDK 带 API 36，lint 报 `OldTargetApi`（本地只有 35）→ `disable 'OldTargetApi'`。
+* `android-actions/setup-android@v3` 在 ubuntu-24.04 上失败 → 直接用镜像自带 `sdkmanager`
+  安装 platform 35 / build-tools 35 / NDK 27.2。
 
 ### MacBook 已实现
 

@@ -130,7 +130,7 @@ Windows 客户端命令：
 - `--self-test`：用真实 UDP 客户端自检 11 项流程，部署机上可直接验证。
 - `--help`：完整参数说明（租约、上限、限流、扫描间隔）。
 
-当前能力边界：STUN Binding 与 UDP 信令会话完整可用；**Windows 到 Windows 的实时远程桌面已完整可用**（实时画面 + 键鼠控制，同进程与两进程均实测通过）；**Rust 跨平台网络核心已完成**（102 项测试 + 40 项 ABI 检查通过）；**Android 控制端（Viewer）已完成并重写为 UU 风格界面**（真实 API 35 `javac` 校验通过，APK 由 CI 打）；**MacBook 客户端（arm64 + Intel x64）代码与构建配置已交付，但未在 macOS 上编译验证**。
+当前能力边界：STUN Binding 与 UDP 信令会话完整可用；**Windows 到 Windows 的实时远程桌面已完整可用**（实时画面 + 键鼠控制，同进程与两进程均实测通过）；**Rust 跨平台网络核心已完成**（102 项测试 + 40 项 ABI 检查通过）；**Android 控制端（Viewer）已完成并重写为 UU 风格界面**（GitHub Actions 产出带原生库的 APK）；**MacBook 客户端（arm64 + Intel x64）已在 GitHub Actions 编译通过并产出 App，但尚未在真机运行界面**。
 
 未实现：TURN 中继、真实公网打洞、信令自动交换端点（当前需手工填端口）、硬件 NVENC MFT 事件驱动、D3D11 零拷贝、音频、多 Viewer、自适应码率。
 

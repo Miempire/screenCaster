@@ -120,10 +120,14 @@ bash scripts/build-android.sh apk      # assembleDebug
   lint 报告 **No issues found**（工程开了 `abortOnError` + `warningsAsErrors`）。
   lint 抓到一个真问题：直连端口用 `setText("42000")` 触发 `SetTextI18n`，已改为
   `default_video_port` / `default_control_port` 字符串资源。
-- 产物 `app/build/outputs/apk/debug/app-debug.apk` 约 94 KB。本机没有 NDK，这个 APK 不含
-  `libscreencast_core.so`；`.so` 由 CI 的 `cargo-ndk` 步骤生成后再打包。
-- 核对 `res/values/strings.xml` 与 `res/drawable/*`：没有未引用资源（删除了 `ic_link`、
-  `ic_chevron`）。
+- GitHub Actions（提交 `532f622`）的 `android` job 全绿：`sdkmanager` 安装
+  platform 35 / build-tools 35 / NDK 27.2 → lint → `cargo-ndk` 生成 arm64-v8a + x86_64 的
+  `.so` → `assembleDebug`。产物 `screencast-android-debug` **0.53 MB**（含原生库）。
+- CI 的 SDK 包含 API 36，lint 因此报 `OldTargetApi`（本地只有 API 35，没触发）。已在
+  `app/build.gradle` 显式 `disable 'OldTargetApi'`：升级到 36 需要更新的 AGP/compileSdk，
+  这一版有意锁定 35。
+- 本机 `app/build/outputs/apk/debug/app-debug.apk` 约 94 KB，不含 `.so`（本机无 NDK），
+  只用于本地验证；带原生库的包以 CI 产物为准。
 
 ## 未实现
 
