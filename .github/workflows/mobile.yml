@@ -93,7 +93,7 @@ jobs:
           if-no-files-found: ignore
   ios:
     needs: rust-checks
-    runs-on: macos-14
+    runs-on: macos-15
     env:
       IOS_BUNDLE_ID: ${{ vars.IOS_BUNDLE_ID || 'org.screencast.app' }}
     steps:

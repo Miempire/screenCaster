@@ -444,13 +444,13 @@ Bundle id 默认 `org.screencast.macos`，可用 `MACOS_BUNDLE_ID=...` 覆盖。
 
 ### 在 GitHub 上编译
 
-`.github/workflows/macos.yml` 在 `macos-14` 上跑矩阵，推送或 PR 改动 `native/**`、
-`apps/macos/**`、`scripts/build-macos.sh` 时触发：
+`.github/workflows/macos.yml` 跑矩阵，推送或 PR 改动 `native/**`、`apps/macos/**`、
+`scripts/build-macos.sh` 时触发：
 
-| 矩阵项 | 步骤 | 产物 |
-|---|---|---|
-| x64 | `framework` → `app-x64` → `verify` | `screencast-macos-x64`（`ScreenCast-x64.zip`） |
-| universal | `framework` → `app` → `verify` | `screencast-macos-universal`（`ScreenCast-universal.zip`） |
+| 矩阵项 | Runner | 步骤 | 产物 |
+|---|---|---|---|
+| x64 | `macos-15-intel`（Intel） | `framework` → `app-x64` → `verify` | `screencast-macos-x64`（`ScreenCast-x64.zip`） |
+| universal | `macos-15`（arm64） | `framework` → `app` → `verify` | `screencast-macos-universal`（`ScreenCast-universal.zip`） |
 
 `release.yml` 已把 macOS 工作流加入 `needs`，打 `v*` 标签时产物一起进 Release。App 是 ad-hoc
 签名（`CODE_SIGN_IDENTITY="-"`），下载后首次打开需右键「打开」，并手动授予屏幕录制 / 辅助功能
@@ -481,9 +481,9 @@ Bundle id 默认 `org.screencast.macos`，可用 `MACOS_BUNDLE_ID=...` 覆盖。
   **不是类型检查**）。
 * `project.yml` 显式设置 `ARCHS: 'arm64 x86_64'`、`ONLY_ACTIVE_ARCH: NO`，
   `scripts/build-macos.sh` 增加 `app-x64` / `app-arm64`；本地没有执行过。
-* 新增 `.github/workflows/macos.yml`，由 `macos-14` 实际执行 `xcodegen` / `xcodebuild` /
-  `lipo` 并上传 x64 与 universal 产物。**这个工作流还没有在 GitHub 上跑过**，Swift 类型错误
-  要等第一次 CI 运行才能暴露。
+* 新增 `.github/workflows/macos.yml`，由 `macos-15-intel`（x64）与 `macos-15`（universal）实际
+  执行 `xcodegen` / `xcodebuild` / `lipo` 并上传产物。**这个工作流还没有完整跑通**，Swift 类型
+  错误要等 CI 运行才能暴露。
 * 新界面（侧栏四页、9 位码输入、会话悬浮条）只做了静态审阅，没有在窗口里渲染过。
 
 以下全部**未经执行验证**：

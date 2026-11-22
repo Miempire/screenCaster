@@ -331,7 +331,7 @@ rustfmt --check                                                     干净
 | macOS 新增/重写 | `Theme`、`DeviceBook`、`SettingsPanel`，重写 `ScreenCastMacApp`、`SharedViews`、`ViewerPanel`、`HostPanel` |
 | macOS 语法 | tree-sitter-swift 解析 `Sources/**/*.swift` 全部无 `ERROR` 节点（**仅语法**，不是类型检查） |
 | macOS x64 | `project.yml` 固定 `ARCHS: 'arm64 x86_64'`、`ONLY_ACTIVE_ARCH: NO`；`build-macos.sh` 增加 `app-x64` / `app-arm64` |
-| macOS 编译 | 本地**未执行** `xcodegen` / `xcodebuild` / `lipo`；新增 `.github/workflows/macos.yml`，推送到 GitHub 后在 `macos-14` 上编译 **x64 与 universal** 两个 App 并上传产物，`release.yml` 已把 macOS 纳入发布 |
+| macOS 编译 | 本地**未执行** `xcodegen` / `xcodebuild` / `lipo`；新增 `.github/workflows/macos.yml`，推送到 GitHub 后在 `macos-15-intel` 上编译 **x64**、`macos-15` 上编译 **universal** 并上传产物，`release.yml` 已把 macOS 纳入发布 |
 
 两端使用同一套令牌：背景 `#0E1014`、卡片 `#161A20`、主色 `#00D26A`、弱化 `#8D94A3`。连接码是
 本机设备簿生成的本地快捷码（IP 直连成功后保存并生成），不是服务端签发，两端 README 都写明了这一点。

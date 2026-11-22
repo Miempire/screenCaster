@@ -24,17 +24,19 @@ concurrency:
   cancel-in-progress: true
 jobs:
   build:
-    runs-on: macos-14
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: x64
+            os: macos-15-intel
             mode: app-x64
             artifact: screencast-macos-x64
           - name: universal
+            os: macos-15
             mode: app
             artifact: screencast-macos-universal
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
