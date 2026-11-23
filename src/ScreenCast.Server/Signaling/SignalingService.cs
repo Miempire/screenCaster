@@ -13,6 +13,7 @@ namespace ScreenCast.Server.Signaling;
 public sealed class SignalingService
 {
     private readonly SignalingOptions options;
+    private readonly PairingTable pairings;
     private readonly object gate = new();
     private readonly Dictionary<string, DeviceEntry> devices = new(StringComparer.Ordinal);
     private readonly Dictionary<IPEndPoint, string> endpointOwners = [];
@@ -24,15 +25,18 @@ public sealed class SignalingService
     private long removedDevices;
     private long malformedMessages;
 
-    public SignalingService(SignalingOptions options)
+    public SignalingService(SignalingOptions options, PairingTable? pairings = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         options.Validate();
         this.options = options;
+        this.pairings = pairings ?? new PairingTable(null);
         replies = new ResponseCache(options.ReplyCacheCapacity, options.ReplyCacheMs);
     }
 
     public SignalingOptions Options => options;
+
+    public PairingTable Pairings => pairings;
 
     public int DeviceCount
     {
@@ -130,8 +134,11 @@ public sealed class SignalingService
             }
             foreach (SessionEntry session in sessions.Values.ToArray())
             {
-                bool idle = nowMs - session.LastActivityMs > options.SessionIdleMs;
-                bool inviteExpired = session.State == SessionState.Created && nowMs - session.CreatedMs > options.InviteTimeoutMs;
+                bool idle = (session.State != SessionState.Created || session.HasViewer) &&
+                    nowMs - session.LastActivityMs > options.SessionIdleMs;
+                bool inviteExpired = session.State == SessionState.Created && !session.HasViewer &&
+                    !pairings.IsPersistent(session.InviteCode) &&
+                    nowMs - session.CreatedMs > options.InviteTimeoutMs;
                 if (!idle && !inviteExpired) continue;
                 CloseAndNotify(session, SessionCloseReason.Timeout, string.Empty, outbox);
                 removed++;
@@ -266,7 +273,7 @@ public sealed class SignalingService
         AssertHostCapacity(host.DeviceId);
 
         SignalingId sessionId = SignalingId.NewRandom();
-        string inviteCode = viewer is null ? NewInviteCode() : string.Empty;
+        string inviteCode = viewer is null ? pairings.GetOrCreate(host.DeviceId, NewInviteCode) : string.Empty;
         var session = new SessionEntry(sessionId, host.DeviceId, viewer?.DeviceId, inviteCode, nowMs);
         sessions[sessionId] = session;
         if (inviteCode.Length > 0) invites[inviteCode] = sessionId;
@@ -301,6 +308,30 @@ public sealed class SignalingService
         {
             sessions.TryGetValue(byCode, out session);
         }
+        if (session is null && sessionId.IsZero && pairings.HostForCode(inviteCode) is string pairedHostId)
+        {
+            if (!devices.TryGetValue(pairedHostId, out DeviceEntry? pairedHost) || !pairedHost.HasRole(DeviceRoles.Host))
+            {
+                throw new SignalingRequestException(SignalingErrorCode.NotFound, "paired host is offline");
+            }
+            if (pairedHost.DeviceId == sender.DeviceId) throw new SignalingRequestException(SignalingErrorCode.RoleMismatch, "host cannot join as a viewer");
+            session = sessions.Values.FirstOrDefault(candidate =>
+                candidate.HostId == pairedHost.DeviceId &&
+                candidate.ViewerId == sender.DeviceId &&
+                candidate.State == SessionState.Created);
+            if (session is null)
+            {
+                AssertGlobalCapacity();
+                AssertDeviceCapacity(sender.DeviceId);
+                AssertHostCapacity(pairedHost.DeviceId);
+                session = new SessionEntry(SignalingId.NewRandom(), pairedHost.DeviceId, sender.DeviceId, inviteCode, nowMs);
+                sessions[session.Id] = session;
+                invites[inviteCode] = session.Id;
+                outbox.Add(new OutboundMessage(BuildView(session, SignalingMessageType.JoinRequested, SignalingId.NewRandom(), DeviceRoles.Host), pairedHost.Endpoint));
+                return BuildView(session, SignalingMessageType.SessionJoined, requestId, DeviceRoles.Viewer);
+            }
+            invites[inviteCode] = session.Id;
+        }
         if (session is null)
         {
             throw new SignalingRequestException(SignalingErrorCode.NotFound, inviteCode.Length > 0 ? "invite is invalid or expired" : "session not found");
@@ -308,7 +339,15 @@ public sealed class SignalingService
         if (session.HostId == sender.DeviceId) throw new SignalingRequestException(SignalingErrorCode.RoleMismatch, "host cannot join as a viewer");
         if (session.HasViewer && session.ViewerId != sender.DeviceId)
         {
-            throw new SignalingRequestException(session.State == SessionState.Created ? SignalingErrorCode.Busy : SignalingErrorCode.InvalidState, "session already has a viewer");
+            if (session.State != SessionState.Created) throw new SignalingRequestException(SignalingErrorCode.InvalidState, "session already has a viewer");
+            AssertDeviceCapacity(sender.DeviceId);
+            session.ViewerId = sender.DeviceId;
+            session.LastActivityMs = nowMs;
+            if (devices.TryGetValue(session.HostId, out DeviceEntry? paired))
+            {
+                outbox.Add(new OutboundMessage(BuildView(session, SignalingMessageType.JoinRequested, SignalingId.NewRandom(), DeviceRoles.Host), paired.Endpoint));
+            }
+            return BuildView(session, SignalingMessageType.SessionJoined, requestId, DeviceRoles.Viewer);
         }
         session.LastActivityMs = nowMs;
         if (!session.HasViewer)
@@ -596,7 +635,7 @@ public sealed class SignalingService
             }
 
             string value = new(code);
-            if (!invites.ContainsKey(value)) return value;
+            if (!invites.ContainsKey(value) && !pairings.IsPersistent(value)) return value;
         }
 
         throw new SignalingRequestException(SignalingErrorCode.LimitExceeded, "invite code space exhausted");

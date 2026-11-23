@@ -74,6 +74,7 @@ final class HomeView extends FrameLayout {
         devicesList.setOrientation(LinearLayout.VERTICAL);
 
         codeField = new CodeFieldView(context);
+        codeField.setCode(book.serverCode());
         directToggle = UiKit.text(context, "", 12, UiKit.TEXT_DIM, true);
         directToggle.setGravity(Gravity.CENTER);
         directToggle.setPadding(0, UiKit.dp(context, 12), 0, UiKit.dp(context, 12));
@@ -619,6 +620,10 @@ final class HomeView extends FrameLayout {
         book.remove(device);
         refreshDevices();
         showNotice(getContext().getString(R.string.device_deleted));
+    }
+
+    void rememberServerCode(String code) {
+        book.rememberServerCode(code);
     }
 
     void showDevicesTab() {

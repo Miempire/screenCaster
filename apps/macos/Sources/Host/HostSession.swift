@@ -288,8 +288,11 @@ final class HostSession: ObservableObject {
 
     @MainActor
     private func acceptViewer(_ view: SessionView) async {
-        guard let client = signaling, let current = signalingView, !signalingAccepted else { return }
-        guard view.sessionId == current.sessionId else { return }
+        guard let client = signaling, !signalingAccepted else { return }
+        if let current = signalingView, view.sessionId != current.sessionId {
+            guard !signalingMediaStarted else { return }
+            signalingView = view
+        }
         signalingAccepted = true
         let epoch = signalingEpoch
         statusText = "控制端已加入，正在接受…"

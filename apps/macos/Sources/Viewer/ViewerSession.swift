@@ -186,6 +186,7 @@ final class ViewerSession: ObservableObject {
             try core.start()
 
             signalingMediaStarted = true
+            DeviceIdentity.rememberCode(digits)
             activate(core: core, bound: bound,
                      status: "已连接 \(address):\(host.videoPort)/\(host.controlPort)，本机端口 \(bound.video)/\(bound.control)")
         } catch {

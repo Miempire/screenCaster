@@ -183,6 +183,7 @@ public sealed class MainWindow : Window
         _surface.Element.MouseLeftButtonDown += (_, _) => _surface.Element.Focus();
         _surface.Element.MouseLeftButtonDown += OnSurfaceDoubleClick;
 
+        _codeInput.Text = DeviceIdentity.LastPairedCode;
         UpdateRole();
     }
 
@@ -447,7 +448,11 @@ public sealed class MainWindow : Window
     private async Task AcceptViewerAsync(SignalingClient client, SessionView request)
     {
         if (_signalingView is null || _accepted || _pendingDisplay is null) return;
-        if (!request.SessionId.Equals(_signalingView.SessionId)) return;
+        if (!request.SessionId.Equals(_signalingView.SessionId))
+        {
+            if (_mediaStarted) return;
+            _signalingView = request;
+        }
         _accepted = true;
         try
         {
@@ -523,6 +528,7 @@ public sealed class MainWindow : Window
             _signalingView = joined;
             _inviteCode = code;
             _mediaStarted = false;
+            DeviceIdentity.SaveLastPairedCode(code);
             _status.Text = "已找到被控端，正在交换媒体地址…";
             Log($"已加入会话，等待主机媒体信息（{SignalingServerAddress.Host}）。");
 

@@ -164,6 +164,106 @@ Test("signaling nine-digit invite and peer media exchange", () =>
 {
     RunSignalingFlowAsync().GetAwaiter().GetResult();
 });
+Test("stable pairing code survives idle sessions and server restarts", () =>
+{
+    void Check(bool condition, string label) { if (!condition) throw new Exception(label); }
+    string file = Path.Combine(Path.GetTempPath(), $"screencast-pair-{Guid.NewGuid():N}.json");
+    try
+    {
+        var options = new ScreenCast.Server.SignalingOptions();
+        var service = new ScreenCast.Server.Signaling.SignalingService(options, new ScreenCast.Server.Signaling.PairingTable(file));
+        var hostEnd = new IPEndPoint(IPAddress.Loopback, 41000);
+        var viewerEnd = new IPEndPoint(IPAddress.Loopback, 41001);
+        long now = 1_000;
+
+        List<ScreenCast.Server.Signaling.OutboundMessage> Send(IPEndPoint from, SignalingMessageType type, Action<SignalingWriter> body)
+        {
+            var writer = new SignalingWriter();
+            body(writer);
+            var outbox = new List<ScreenCast.Server.Signaling.OutboundMessage>();
+            service.Handle(writer.ToMessage(type, SignalingId.NewRandom()), from, now, outbox);
+            return outbox;
+        }
+        byte[] Reply(List<ScreenCast.Server.Signaling.OutboundMessage> outbox, IPEndPoint to) =>
+            outbox.Single(message => message.Destination.Equals(to)).Datagram;
+        SignalingReader Open(byte[] datagram)
+        {
+            Check(SignalingWire.TryParseHeader(datagram, out SignalingHeader header), "framed reply");
+            return new SignalingReader(datagram, header);
+        }
+
+        Send(hostEnd, SignalingMessageType.Register, writer =>
+        {
+            writer.Text("stable-host");
+            writer.U8((byte)DeviceRoles.Host);
+            writer.U8(0);
+            writer.Blob(ReadOnlySpan<byte>.Empty);
+            writer.Endpoints(Array.Empty<IPEndPoint>());
+        });
+        Send(viewerEnd, SignalingMessageType.Register, writer =>
+        {
+            writer.Text("stable-viewer");
+            writer.U8((byte)DeviceRoles.Viewer);
+            writer.U8(0);
+            writer.Blob(ReadOnlySpan<byte>.Empty);
+            writer.Endpoints(Array.Empty<IPEndPoint>());
+        });
+
+        SignalingReader created = Open(Reply(Send(hostEnd, SignalingMessageType.CreateSession, writer =>
+        {
+            writer.Text(string.Empty);
+            writer.Text(string.Empty);
+        }), hostEnd));
+        SignalingId firstSession = created.Id();
+        Check(created.U8() == (byte)SessionState.Created, "created state");
+        created.U32();
+        created.U8();
+        string code = created.Text(16);
+        Check(code.Length == 9 && code[0] != '0', "nine-digit code");
+
+        now += options.InviteTimeoutMs * 10L + options.SessionIdleMs * 10L;
+        Send(hostEnd, SignalingMessageType.Heartbeat, _ => { });
+        Send(viewerEnd, SignalingMessageType.Heartbeat, _ => { });
+        var scanOutbox = new List<ScreenCast.Server.Signaling.OutboundMessage>();
+        service.Scan(now, scanOutbox);
+        Check(service.SessionCount == 1, "waiting session is kept alive by the stable code");
+        Check(scanOutbox.Count == 0, "no close notification while the host waits");
+
+        List<ScreenCast.Server.Signaling.OutboundMessage> joined = Send(viewerEnd, SignalingMessageType.JoinSession, writer =>
+        {
+            writer.Text(code);
+            writer.Id(SignalingId.Zero);
+        });
+        SignalingReader joinedView = Open(Reply(joined, viewerEnd));
+        Check(joinedView.Id().Equals(firstSession), "viewer joins the waiting session");
+        Check(joined.Any(message => message.Destination.Equals(hostEnd)), "host is notified of the join");
+
+        Send(hostEnd, SignalingMessageType.CloseSession, writer =>
+        {
+            writer.Id(firstSession);
+            writer.U8((byte)SessionCloseReason.UserClosed);
+        });
+        Check(service.SessionCount == 0, "session is gone after close");
+
+        List<ScreenCast.Server.Signaling.OutboundMessage> rejoined = Send(viewerEnd, SignalingMessageType.JoinSession, writer =>
+        {
+            writer.Text(code);
+            writer.Id(SignalingId.Zero);
+        });
+        SignalingReader rejoinedView = Open(Reply(rejoined, viewerEnd));
+        Check(!rejoinedView.Id().Equals(firstSession), "code opens a fresh session without a new invite");
+        Check(rejoined.Any(message => message.Destination.Equals(hostEnd)), "host is woken by the stored code");
+        Check(service.SessionCount == 1, "only the fresh session exists");
+
+        var reloaded = new ScreenCast.Server.Signaling.PairingTable(file);
+        Check(reloaded.HostForCode(code) == "stable-host", "pairing survives a server restart");
+        Check(reloaded.CodeForHost("stable-host") == code, "host keeps the same code");
+    }
+    finally
+    {
+        File.Delete(file);
+    }
+});
 
 Console.WriteLine($"All {passed} tests passed.");
 

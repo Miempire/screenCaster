@@ -50,7 +50,8 @@ public static class ServerHost
             }
             if (options.SignalingEnabled)
             {
-                signaling = new SignalingServer(options.Signaling, clock);
+                var pairings = new PairingTable(string.IsNullOrEmpty(options.PairingFile) ? null : Path.GetFullPath(options.PairingFile));
+                signaling = new SignalingServer(options.Signaling, clock, pairings);
                 signaling.Start(cancellation.Token);
             }
         }
@@ -73,6 +74,7 @@ public static class ServerHost
             Console.WriteLine($"limits: devices<={limits.MaxDevices} sessions<={limits.MaxSessions} perDevice<={limits.MaxSessionsPerDevice} " +
                 $"perHost<={limits.MaxSessionsPerHost} global={limits.GlobalRequestsPerSecond}/s perIp={limits.PerAddressRequestsPerSecond}/s");
             Console.WriteLine($"leases: device={limits.DeviceLeaseMs}ms session={limits.SessionIdleMs}ms invite={limits.InviteTimeoutMs}ms scan={limits.ScanIntervalMs}ms");
+            Console.WriteLine($"pairings: {options.PairingFile} ({signaling.Service.Pairings.Count} hosts)");
         }
         Console.WriteLine("Ctrl+C stops both sockets.");
 

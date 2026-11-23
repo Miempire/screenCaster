@@ -127,12 +127,15 @@ Windows 客户端命令：
 服务端命令：
 
 - `--bind 0.0.0.0 --stun-port 3478 --signal-port 3479`：同时开 STUN 与信令。
+- `--pairing-file pairings.json`：固定连接码表；同一被控设备始终使用同一个 9 位码，重启服务器后仍然有效。
 - `--self-test`：用真实 UDP 客户端自检 11 项流程，部署机上可直接验证。
 - `--help`：完整参数说明（租约、上限、限流、扫描间隔）。
 
 当前能力边界：STUN Binding 与 UDP 信令会话完整可用；**Windows 到 Windows 的实时远程桌面已完整可用**（实时画面 + 键鼠控制，同进程与两进程均实测通过）；**Rust 跨平台网络核心已完成**（102 项测试 + 40 项 ABI 检查通过）；**Android 控制端（Viewer）已完成并重写为 UU 风格界面**（GitHub Actions 产出带原生库的 APK）；**MacBook 客户端（arm64 + Intel x64）已在 GitHub Actions 编译通过并产出 App，但尚未在真机运行界面**。
 
-未实现：TURN 中继、真实公网打洞、信令自动交换端点（当前需手工填端口）、硬件 NVENC MFT 事件驱动、D3D11 零拷贝、音频、多 Viewer、自适应码率。
+客户端信令地址固定为 `jsspace.xyz:3479`；配对一次后连接码长期有效，三端都会记住上次成功配对的码。
+
+未实现：TURN 中继、真实公网打洞、硬件 NVENC MFT 事件驱动、D3D11 零拷贝、音频、多 Viewer、自适应码率。
 
 从 FFmpeg 提取的解码/呈现机制记录在 [docs/ffmpeg-extraction.md](docs/ffmpeg-extraction.md)：解码纹理创建与绑定标志、GPU 回读三步（含 `RowPitch` 与 opaque 格式限制）、`E_PENDING` 有界重试、coded size 而非显示尺寸、NV12→RGB 定点系数。FFmpeg 代码本身未进入本仓库。
 

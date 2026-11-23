@@ -2,7 +2,7 @@
 
 本文按"服务器 → Windows 主机 → 控制端"的顺序给出可照做的步骤。所有命令都在仓库根目录执行，产物统一输出到 `artifacts/`。
 
-> 状态说明：服务器（STUN + 信令）与 Windows 客户端已完成；Windows、Android、macOS 三端默认通过固定地址 `jsspace.xyz` 完成信令配对，IP 直连保留为高级回退。Android 与 MacBook 的部署步骤见对应小节，标注了各自的验证状态。
+> 状态说明：服务器（STUN + 信令）与 Windows 客户端已完成；Windows、Android、macOS 三端默认通过固定地址 `jsspace.xyz` 完成信令配对，IP 直连保留为高级回退。配对一次后连接码固定保存在服务器，客户端会记住上次的码，之后无需重新配对。Android 与 MacBook 的部署步骤见对应小节，标注了各自的验证状态。
 
 ## 0. 环境要求
 
@@ -84,7 +84,10 @@ ScreenCast Binding listening on 0.0.0.0:3478 (RFC5389 Binding only; TURN not imp
 Signaling listening on 0.0.0.0:3479 (SCSG v1, max 8192 B per message)
 limits: devices<=... sessions<=... perDevice<=... perHost<=...
 leases: device=...ms session=...ms invite=...ms scan=...ms
+pairings: E:\ScreenCast\pairings.json (0 hosts)
 ```
+
+`pairings.json` 保存每个被控设备的固定连接码，首次创建会话时自动生成，重启服务器后继续沿用。
 
 **默认只绑 127.0.0.1**，不显式给 `--bind 0.0.0.0` 就不会对外服务。
 
@@ -104,7 +107,8 @@ ScreenCast.Server.exe --help
 | `--no-stun` / `--no-signal` | 都启用 | 关掉其中一个子系统 |
 | `--device-lease-seconds` | 45 | 设备多久无活动被移除 |
 | `--session-idle-seconds` | 45 | 会话多久无活动被关闭 |
-| `--invite-seconds` | 300 | 连接码有效期；过期后 Host 自动重建会话并换码 |
+| `--invite-seconds` | 300 | 未配对邀请的有效期；已配对设备的固定码不受影响 |
+| `--pairing-file` | `pairings.json` | 固定连接码表；删除该文件会让所有已配对设备换码 |
 | `--scan-seconds` | 5 | 清理扫描间隔 |
 | `--max-sessions` / `--max-devices` | 见 help | 全局上限 |
 | `--max-sessions-per-device` / `--max-sessions-per-host` | 见 help | 单设备上限 |
@@ -146,7 +150,7 @@ dotnet publish src/ScreenCast.Windows -c Release -r win-x64 --self-contained tru
 3. 连接方式保持 **服务器配对**，点 **开始共享**。
 4. 界面显示服务器签发的 **9 位数字连接码**（例如 `683 204 917`），并提示"等待控制端输入连接码"。
 
-把连接码告诉控制端即可，不需要 IP 和端口。码的默认有效期是 300 秒；过期后 Host 自动重建会话并换一个新码，界面会直接刷新。
+把连接码告诉控制端即可，不需要 IP 和端口。同一个被控设备会一直使用同一个码：重开会话、重启客户端、重启服务器（`pairings.json` 保留）后都不变，因此只需要配对一次。码过期不再影响已配对设备；控制端离线时被控端继续等待，控制端再次加入会自动建立新会话。
 
 5. 控制端加入并接受后，双方通过服务器交换媒体地址，随后建立点对点传输。状态栏会显示"已连接 <地址>:<视频端口>/<控制端口>"，以及采集/编码/关键帧/发送字节数。
 
@@ -155,7 +159,7 @@ Host 的输入注入是**租约制**：只有控制端显式申请租约后才�
 ### 2.3 控制端（Viewer）
 
 1. 双击 EXE，角色选 **Viewer（控制）**。
-2. 连接方式保持 **服务器配对**，输入 Host 界面上的 9 位连接码。
+2. 连接方式保持 **服务器配对**，输入 Host 界面上的 9 位连接码；输入框会自动填入上次成功配对的码。
 3. 点 **连接**，等待双方交换媒体地址。
 4. 连上后窗口里就是远端桌面，**点一下画面**让窗口拿到键盘焦点，之后鼠标键盘都会转发到远端。
 5. **双击画面**切换全屏/窗口。
@@ -202,7 +206,7 @@ bash scripts/build-android.sh all
 ### 3.2 安装与使用
 
 1. 安装 APK（debug 签名，允许未知来源）。
-2. 在首页输入被控端显示的 9 位连接码，点连接；页面会提示"正在连接服务器 jsspace.xyz…"，随后等待被控端。
+2. 在首页输入被控端显示的 9 位连接码，点连接；输入框会自动填入上次成功配对的码。页面提示"正在连接服务器 jsspace.xyz…"，随后等待被控端。
 3. 画面出现后：
    - 单指拖动 = 移动鼠标
    - 单指点击 = 左键
@@ -250,13 +254,13 @@ scripts/build-macos.sh run
 ### 4.3 使用
 
 **Viewer（控制 Windows / Mac）**：
-1. 角色选 Viewer，输入对方设备上的 9 位连接码，连接。
+1. 角色选 Viewer，输入对方设备上的 9 位连接码（上次的码会自动填入），连接。
 2. 双方通过 `jsspace.xyz` 交换媒体地址，成功后画面出现；点击窗口获得焦点，之后鼠标键盘转发到远端。
 
 **Host（被 Mac 共享）**：
 1. 角色选 Host，先确认两个权限都已授予。
 2. 选择要共享的显示器，点「开始共享」，界面显示服务器签发的 9 位连接码。
-3. 把连接码发给控制端；码过期会自动刷新。
+3. 把连接码发给控制端；同一个设备始终使用同一个码，过期也不会变。
 
 **直连回退**：两侧面板都保留了「直连（高级）」，需要手工对齐 IP、端口与共享密钥，不经过服务器。
 

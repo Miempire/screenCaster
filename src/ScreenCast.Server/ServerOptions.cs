@@ -81,6 +81,10 @@ public sealed class ServerOptions
     public int StunPort { get; set; } = 3478;
     public bool StunEnabled { get; set; } = true;
     public bool SignalingEnabled { get; set; } = true;
+
+    /// <summary>File that remembers one stable invite code per host. Empty disables persistence.</summary>
+    public string PairingFile { get; set; } = "pairings.json";
+
     public SignalingOptions Signaling { get; } = new();
 
     /// <summary>Parses the documented command line. Throws <see cref="ArgumentException"/> on unknown or incomplete input.</summary>
@@ -102,6 +106,9 @@ public sealed class ServerOptions
                     break;
                 case "--signal-port" when i + 1 < args.Length:
                     options.Signaling.Port = ParsePort(args[++i]);
+                    break;
+                case "--pairing-file" when i + 1 < args.Length:
+                    options.PairingFile = args[++i];
                     break;
                 case "--no-stun":
                     options.StunEnabled = false;
@@ -195,6 +202,7 @@ public sealed class ServerOptions
           --port <n>                      STUN Binding port, alias of --stun-port (default 3478)
           --stun-port <n>                 STUN Binding port (default 3478)
           --signal-port <n>               Signaling port (default 3479)
+          --pairing-file <path>           Stable code table (default pairings.json, empty disables)
           --no-stun                       Do not open the STUN socket
           --no-signal                     Do not open the signaling socket
           --device-lease-seconds <n>      Device lease, default 45

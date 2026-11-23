@@ -29,13 +29,13 @@ public sealed class SignalingServer : IAsyncDisposable
     private long socketErrors;
     private long dispatchFailures;
 
-    public SignalingServer(SignalingOptions options, IMonotonicClock? clock = null)
+    public SignalingServer(SignalingOptions options, IMonotonicClock? clock = null, PairingTable? pairings = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         options.Validate();
         this.options = options;
         this.clock = clock ?? SystemMonotonicClock.Instance;
-        service = new SignalingService(options);
+        service = new SignalingService(options, pairings);
         limiter = new RateLimiter(options.GlobalRequestsPerSecond, options.PerAddressRequestsPerSecond, this.clock);
     }
 

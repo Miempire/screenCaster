@@ -101,6 +101,10 @@ final class CodeFieldView extends FrameLayout {
         input.setText("");
     }
 
+    void setCode(String code) {
+        input.setText(code == null ? "" : code);
+    }
+
     void focusInput() {
         input.requestFocus();
         InputMethodManager manager =

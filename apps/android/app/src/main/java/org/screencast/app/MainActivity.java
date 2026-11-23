@@ -391,6 +391,7 @@ public final class MainActivity extends Activity {
                 throw new PairingException(R.string.reason_failed,
                         describeViewerFailure(started, viewer.lastError()));
             }
+            runOnUiThread(() -> homeView.rememberServerCode(code));
         } catch (PairingException error) {
             failPairing(client, viewer, error, generation);
         } catch (SignalingClient.SignalingException error) {

@@ -23,6 +23,23 @@ enum DeviceIdentity {
                 (scalar.value >= 97 && scalar.value <= 102)
         }
     }
+
+    private static let lastCodeKey = "screencast.macos.last-code"
+
+    static var lastCode: String {
+        guard let text = UserDefaults.standard.string(forKey: lastCodeKey),
+              text.count == 9, text.first != "0",
+              text.allSatisfy({ $0.unicodeScalars.first.map { $0.value >= 48 && $0.value <= 57 } == true })
+        else {
+            return ""
+        }
+        return text
+    }
+
+    static func rememberCode(_ code: String) {
+        guard code.count == 9, code.first != "0" else { return }
+        UserDefaults.standard.set(code, forKey: lastCodeKey)
+    }
 }
 
 enum SignalingClientError: LocalizedError {

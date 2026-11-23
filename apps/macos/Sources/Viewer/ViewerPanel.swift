@@ -126,7 +126,7 @@ struct RemoteAssistCard: View {
     let onConnectByCode: (String) -> Void
     let onDirectConnect: (String, Int, Int) -> Void
 
-    @State private var code = ""
+    @State private var code = DeviceIdentity.lastCode
     @State private var showingDirect = false
     @State private var host = "127.0.0.1"
     @State private var videoPort = String(CoreDefaults.hostVideoPort)

@@ -46,6 +46,7 @@ final class DeviceBook {
 
     private static final String STORE = "screencast.devices";
     private static final String KEY_DEVICES = "devices";
+    private static final String KEY_SERVER_CODE = "server-code";
 
     private final SharedPreferences preferences;
     private final SecureRandom random = new SecureRandom();
@@ -126,6 +127,18 @@ final class DeviceBook {
         devices.add(0, updated);
         write(devices);
         return updated;
+    }
+
+    String serverCode() {
+        String raw = preferences.getString(KEY_SERVER_CODE, "");
+        return raw != null && raw.length() == 9 && !raw.startsWith("0") ? raw : "";
+    }
+
+    void rememberServerCode(String code) {
+        if (code == null || code.length() != 9 || code.startsWith("0")) {
+            return;
+        }
+        preferences.edit().putString(KEY_SERVER_CODE, code).apply();
     }
 
     void remove(Device device) {
