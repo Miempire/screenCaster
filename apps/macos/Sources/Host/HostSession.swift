@@ -299,8 +299,8 @@ final class HostSession: ObservableObject {
             signalingView = accepted
             let secret = try MediaKeys.deriveMediaSecret(code: inviteCode, sessionId: accepted.sessionId.bytes)
             let core = try CoreSession(secret: secret, sessionID: accepted.sessionId.bytes, isHost: true)
-            let bound = try core.bind(videoPort: CoreDefaults.hostVideoPort,
-                                      controlPort: CoreDefaults.hostControlPort)
+            let bound = try core.bind(videoPort: UInt16(CoreDefaults.hostVideoPort),
+                                      controlPort: UInt16(CoreDefaults.hostControlPort))
             self.core = core
             boundPorts = BoundPorts(video: bound.video, control: bound.control)
 
