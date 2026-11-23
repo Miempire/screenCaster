@@ -6,6 +6,14 @@ namespace ScreenCast.Windows;
 
 public sealed class App : Application
 {
+    public App()
+    {
+        Resources.MergedDictionaries.Add(new ResourceDictionary
+        {
+            Source = new Uri("Theme.xaml", UriKind.Relative),
+        });
+    }
+
     [STAThread]
     public static int Main(string[] args)
     {
