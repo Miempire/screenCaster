@@ -372,8 +372,14 @@ final class HostSession: ObservableObject {
 
     @MainActor
     private func handleSignalingClosed(_ view: SessionView) async {
-        guard !signalingMediaStarted else { return }
         if let current = signalingView, view.sessionId != current.sessionId { return }
+        if signalingMediaStarted {
+            signalingAccepted = false
+            signalingMediaStarted = false
+            await cleanup()
+            statusText = "控制端已离开，等待下一次连接…"
+            return
+        }
         signalingEpoch += 1
         signaling?.stop()
         signaling = nil
@@ -383,7 +389,7 @@ final class HostSession: ObservableObject {
         core?.close()
         core = nil
         boundPorts = nil
-        statusText = "连接码已过期，正在刷新…"
+        statusText = "连接已结束，正在刷新…"
         await openSignaling()
     }
 

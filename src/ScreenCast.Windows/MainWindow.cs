@@ -569,33 +569,28 @@ public sealed class MainWindow : Window
 
     private void HandleSignalingClosed(SessionView view)
     {
-        if (_mediaStarted)
+        if (_signalingView is not null && !view.SessionId.Equals(_signalingView.SessionId)) return;
+
+        if (IsHostMode)
         {
-            Log("信令会话已结束，媒体连接继续。");
+            if (_host is not null)
+            {
+                _host.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                _host = null;
+                _surface.Clear();
+            }
+
+            _accepted = false;
+            _mediaStarted = false;
+            _inputEnabled = false;
+            Log("控制端已离开，等待下一次连接。");
+            _status.Text = $"等待控制端输入连接码 {FormatCode(_inviteCode)}…";
+            UpdateRole();
             return;
         }
 
         Log("信令会话已关闭。");
-        bool hostWaiting = IsHostMode && _host is null;
         ShutdownSession();
-        if (hostWaiting)
-        {
-            Log("连接码已过期，正在刷新…");
-            _ = RefreshHostCodeAsync();
-        }
-    }
-
-    private async Task RefreshHostCodeAsync()
-    {
-        try
-        {
-            await StartHostSignalingAsync();
-        }
-        catch (Exception ex)
-        {
-            Log($"刷新连接码失败：{ex.Message}");
-            ShutdownSession();
-        }
     }
 
     private void ShutdownSession()
