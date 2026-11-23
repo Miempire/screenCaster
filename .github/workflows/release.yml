@@ -14,6 +14,7 @@ jobs:
     uses: ./.github/workflows/macos.yml
   release:
     needs: [windows, mobile, macos]
+    if: always()
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -28,8 +29,14 @@ jobs:
           for directory in release-artifacts/*; do
             [ -d "$directory" ] || continue
             name=$(basename "$directory")
-            tar -czf "release-bundles/${name}.tar.gz" -C "$directory" .
+            case "$name" in
+              android-lint-reports) continue ;;
+            esac
+            if [ -n "$(ls -A "$directory")" ]; then
+              (cd "$directory" && zip -q -r "../../release-bundles/${name}.zip" .)
+            fi
           done
+          ls -l release-bundles
       - name: Create tagged release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -37,4 +44,8 @@ jobs:
           TAG: ${{ github.ref_name }}
         shell: bash
         run: |
-          gh release create "$TAG" release-bundles/* --verify-tag --generate-notes --title "$TAG" --draft
+          if ls release-bundles/* >/dev/null 2>&1; then
+            gh release create "$TAG" release-bundles/* --verify-tag --generate-notes --title "$TAG"
+          else
+            gh release create "$TAG" --verify-tag --generate-notes --title "$TAG"
+          fi
